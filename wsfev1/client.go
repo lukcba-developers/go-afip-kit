@@ -146,7 +146,13 @@ func (c *Client) UltimoAutorizado(ctx context.Context, token *wsaa.TokenAcceso, 
 }
 
 // SolicitarCAE emits a comprobante and requests a CAE from AFIP.
+// The request is validated locally first (see Validate) so malformed
+// solicitudes fail fast without consuming an AFIP round-trip.
 func (c *Client) SolicitarCAE(ctx context.Context, token *wsaa.TokenAcceso, cuit int64, solicitud *FECAESolicitarRequest) (*CAEResult, error) {
+	if err := solicitud.Validate(); err != nil {
+		return nil, err
+	}
+
 	// Fill auth
 	solicitud.XMLNS = wsfeNS
 	solicitud.Auth = c.auth(token, cuit)

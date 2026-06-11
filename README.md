@@ -5,14 +5,16 @@ Go client library for Argentina's **AFIP (ARCA)** electronic invoicing web servi
 Covers the full invoicing lifecycle: certificate management, WSAA authentication, WSFEv1 electronic invoicing, and Argentine fiscal rules — all in a standalone library with no framework or database dependencies.
 
 ```bash
-go get github.com/lukcba-developers/go-afip-kit@v0.1.0
+go get github.com/lukcba-developers/go-afip-kit@v0.1.1
 ```
 
 ## Features
 
-- **WSAA Authentication** — CMS/PKCS#7 signed login with automatic token caching and renewal
+- **WSAA Authentication** — CMS/PKCS#7 signed login with automatic token caching and renewal. Concurrent logins for the same CUIT+service are coalesced into a single LoginCms (WSAA rejects duplicates with `coe.alreadyAuthenticated`)
 - **WSFEv1 Electronic Invoicing** — Emit invoices (Facturas A/B/C), credit notes, debit notes, and obtain CAE codes
-- **Idempotent Retries** — Built-in handling of error 10016 (already registered) with automatic CAE recovery
+- **Idempotent Retries** — Built-in handling of error 10016 (already registered) with automatic CAE recovery, plus opt-in transport retries with exponential backoff (`soap.WithRetry`)
+- **Local Request Validation** — `FECAESolicitarRequest.Validate()` catches cuadratura mismatches (error 10048), missing service dates, and malformed amounts before spending an AFIP round-trip
+- **QR Codes (RG 4892)** — `qr.URL()` builds the mandatory AFIP QR payload with spec-correct types (numeric `codAut`)
 - **Certificate Management** — PEM parsing (PKCS#1/PKCS#8), validation, expiry checks, CUIT extraction, and AES-256-GCM encryption at rest
 - **Fiscal Rules** — Automatic comprobante type determination (A/B/C), amount validation with integer centavo arithmetic, IVA calculation, CUIT validation
 - **Homologacion & Production** — Single `production bool` flag switches between sandbox and live environments
@@ -22,11 +24,12 @@ go get github.com/lukcba-developers/go-afip-kit@v0.1.0
 | Package | Description |
 |---------|-------------|
 | `afipkit` (root) | Constants (comprobante types, IVA codes, currencies, documents) and shared error types |
-| `soap/` | Minimal SOAP 1.1 client — envelope wrapping, fault detection, no WSDL |
-| `wsaa/` | WSAA authentication — `Client`, `CachedClient`, `TokenStore` interface |
-| `wsfev1/` | WSFEv1 invoicing — `SolicitarCAE`, `ConsultarComprobante`, parameter queries |
+| `soap/` | Minimal SOAP 1.1 client — envelope wrapping, fault detection, opt-in retries, no WSDL |
+| `wsaa/` | WSAA authentication — `Client`, `CachedClient`, `TokenStore` interface, `IsAlreadyAuthenticated` |
+| `wsfev1/` | WSFEv1 invoicing — `SolicitarCAE`, `ConsultarComprobante`, request validation, parameter queries |
 | `cert/` | Certificate parsing, validation, and `KeyVault` for encrypted private key storage |
 | `fiscal/` | Argentine fiscal rules — comprobante determination, amount validation, IVA calculation |
+| `qr/` | AFIP QR code URL builder (RG 4892) for printed/PDF comprobantes |
 
 ## Quick Start
 
@@ -150,6 +153,44 @@ func main() {
     }
 }
 ```
+
+## QR Codes (RG 4892)
+
+Every printed/PDF comprobante must include an AFIP QR. Build the URL and render it with any QR library:
+
+```go
+import "github.com/lukcba-developers/go-afip-kit/qr"
+
+codAut, _ := qr.ParseCAE(result.CAE) // CAE string → numeric (spec requires a number)
+url, err := qr.URL(qr.Comprobante{
+    Fecha:      "2026-06-11", // YYYY-MM-DD
+    CUIT:       20111111112,  // emisor
+    PtoVta:     3,
+    TipoCmp:    afipkit.CbteFacturaB,
+    NroCmp:     1234,
+    Importe:    12100.00,
+    TipoDocRec: afipkit.DocCUIT,
+    NroDocRec:  20222222223,
+    CodAut:     codAut,
+})
+// url = "https://www.afip.gob.ar/fe/qr/?p=<base64 JSON>"
+```
+
+Defaults are applied for `Ver` (1), `TipoCodAut` ("E"), `Moneda` ("PES") and `Ctz` (1 for PES).
+
+## Transport Retries
+
+AFIP's services fail transiently (timeouts, 5xx). Enable retries with exponential backoff:
+
+```go
+client := wsfev1.NewClient(production,
+    soap.WithTimeout(30*time.Second),
+    soap.WithRetry(2, time.Second),      // 2 extra attempts: +1s, +2s
+    soap.WithLogger(slog.Default()),     // optional: log each retry
+)
+```
+
+SOAP faults and 4xx responses are never retried — only network errors and 5xx without a fault. For `FECAESolicitar`, always pair retries with `SolicitarCAEConReproceso`: if the original request did reach AFIP, the retry gets error 10016 and the CAE is recovered automatically.
 
 ## Fiscal Rules
 
@@ -299,6 +340,13 @@ func (r *RedisTokenStore) Delete(ctx context.Context, key string) error {
 store := &RedisTokenStore{client: redisClient}
 cached := wsaa.NewCachedClient(wsaaClient, store)
 ```
+
+> **Use a persistent store in production.** WSAA refuses to issue a new TA while a
+> previous one is still valid (fault `coe.alreadyAuthenticated`). With `MemoryStore`,
+> a process restart loses the token but AFIP still considers it active — authentication
+> then fails for up to 12 hours. A Redis- or database-backed `TokenStore` survives
+> restarts and avoids this entirely. Detect the condition with
+> `wsaa.IsAlreadyAuthenticated(err)`.
 
 ## Error Handling
 

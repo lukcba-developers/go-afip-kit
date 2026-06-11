@@ -10,6 +10,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -18,6 +19,9 @@ import (
 // Client is a SOAP 1.1 HTTP client.
 type Client struct {
 	httpClient *http.Client
+	maxRetries int
+	retryBase  time.Duration
+	logger     *slog.Logger
 }
 
 // Option configures the SOAP client.
@@ -34,6 +38,32 @@ func WithTimeout(d time.Duration) Option {
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) {
 		c.httpClient = hc
+	}
+}
+
+// WithRetry enables automatic retries for transient failures: network errors
+// and HTTP 5xx responses that carry no SOAP fault. SOAP faults and 4xx
+// responses are never retried — they indicate a problem with the request, not
+// the transport.
+//
+// maxRetries is the number of additional attempts after the first one;
+// baseDelay is doubled on each retry (baseDelay, 2x, 4x, ...). Retries respect
+// context cancellation.
+//
+// Note on FECAESolicitar: a retried request might hit AFIP after the original
+// was actually processed. Pair retries with wsfev1.SolicitarCAEConReproceso,
+// which recovers the CAE when AFIP answers 10016 (already registered).
+func WithRetry(maxRetries int, baseDelay time.Duration) Option {
+	return func(c *Client) {
+		c.maxRetries = maxRetries
+		c.retryBase = baseDelay
+	}
+}
+
+// WithLogger sets a logger for retry attempts. Without it, retries are silent.
+func WithLogger(l *slog.Logger) Option {
+	return func(c *Client) {
+		c.logger = l
 	}
 }
 
@@ -89,34 +119,10 @@ func (c *Client) Call(ctx context.Context, url, soapAction string, request, resp
 	// Prepend XML declaration
 	fullXML := append([]byte(xml.Header), envXML...)
 
-	// 3. HTTP POST
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(fullXML))
+	// 3. HTTP POST, with retries for transient failures
+	respBody, err := c.post(ctx, url, soapAction, fullXML)
 	if err != nil {
-		return fmt.Errorf("soap: create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "text/xml; charset=utf-8")
-	if soapAction != "" {
-		req.Header.Set("SOAPAction", soapAction)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("soap: http call: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 4. Read response body
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("soap: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		// Try to extract SOAP fault from error responses
-		if fault := extractFault(respBody); fault != nil {
-			return fault
-		}
-		return fmt.Errorf("soap: http status %d: %s", resp.StatusCode, truncate(respBody, 500))
+		return err
 	}
 
 	// 5. Check for SOAP fault in 200 response
@@ -136,6 +142,70 @@ func (c *Client) Call(ctx context.Context, url, soapAction string, request, resp
 	}
 
 	return nil
+}
+
+// post sends the envelope and returns the response body. It retries network
+// errors and 5xx-without-fault responses up to c.maxRetries times with
+// exponential backoff. A SOAP fault or non-5xx HTTP error returns immediately.
+func (c *Client) post(ctx context.Context, url, soapAction string, body []byte) ([]byte, error) {
+	var lastErr error
+
+	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := c.retryBase << (attempt - 1)
+			if c.logger != nil {
+				c.logger.Warn("soap: retrying request", "url", url, "attempt", attempt, "delay", delay, "error", lastErr)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("soap: %w (last error: %v)", ctx.Err(), lastErr)
+			case <-time.After(delay):
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("soap: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "text/xml; charset=utf-8")
+		if soapAction != "" {
+			req.Header.Set("SOAPAction", soapAction)
+		}
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, fmt.Errorf("soap: http call: %w", err)
+			}
+			lastErr = fmt.Errorf("soap: http call: %w", err)
+			continue // network error — retryable
+		}
+
+		respBody, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("soap: read response: %w", err)
+			continue // truncated read — retryable
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			// A SOAP fault means the server understood and rejected the
+			// request — retrying won't change the outcome.
+			if fault := extractFault(respBody); fault != nil {
+				return nil, fault
+			}
+			httpErr := fmt.Errorf("soap: http status %d: %s", resp.StatusCode, truncate(respBody, 500))
+			if resp.StatusCode >= 500 {
+				lastErr = httpErr
+				continue // server-side transient — retryable
+			}
+			return nil, httpErr
+		}
+
+		return respBody, nil
+	}
+
+	return nil, lastErr
 }
 
 // extractFault attempts to parse a SOAP Fault from response bytes.
