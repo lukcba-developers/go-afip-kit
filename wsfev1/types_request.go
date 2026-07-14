@@ -53,6 +53,11 @@ type FECAEDetRequest struct {
 	FchVtoPago   string `xml:"FchVtoPago,omitempty"`
 	MonId        string `xml:"MonId"`
 	MonCotiz     string `xml:"MonCotiz"`
+	// CondicionIVAReceptorId es la condición frente al IVA del receptor (RG 5616).
+	// Es el código OFICIAL de AFIP (FEParamGetCondicionIvaReceptor: 1=RI, 4=Exento,
+	// 5=Consumidor Final, 6=Monotributo, ...), NO el enum interno fiscal.CondicionIVA.
+	// omitempty por retrocompatibilidad: los callers que no lo setean no lo envían.
+	CondicionIVAReceptorId int `xml:"CondicionIVAReceptorId,omitempty"`
 
 	Iva        *IvaArray        `xml:"Iva,omitempty"`
 	Tributos   *TributosArray   `xml:"Tributos,omitempty"`
