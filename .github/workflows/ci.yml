@@ -27,6 +27,8 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ matrix.go }}
+      - name: Download modules
+        run: ./.github/scripts/retry.sh go mod download
       - run: go build ./...
       - run: go vet ./...
       - run: go test -race ./...
@@ -35,7 +37,17 @@ jobs:
     name: govulncheck
     runs-on: ubuntu-latest
     steps:
-      - uses: golang/govulncheck-action@v1
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version-input: stable
-          go-package: ./...
+          go-version: stable
+      # Se instala a mano en lugar de usar golang/govulncheck-action: el action
+      # hace un único `go install` y un corte transitorio del proxy de Go
+      # (p. ej. "stream error ... INTERNAL_ERROR") hacía fallar el job sin haber
+      # escaneado nada.
+      - name: Install govulncheck
+        run: ./.github/scripts/retry.sh go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Download modules
+        run: ./.github/scripts/retry.sh go mod download
+      - name: Run govulncheck
+        run: "$(go env GOPATH)/bin/govulncheck ./..."
