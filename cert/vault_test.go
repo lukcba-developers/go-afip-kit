@@ -122,3 +122,43 @@ func TestEncrypt_DifferentNonce(t *testing.T) {
 		t.Fatal("two encryptions of the same data should produce different ciphertext (different nonces)")
 	}
 }
+
+func TestEncryptWithAAD_BindsCiphertextToOwner(t *testing.T) {
+	vault, err := NewKeyVault(testMasterKeyHex())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----")
+	tenantA := []byte("20111111112")
+	tenantB := []byte("20222222223")
+
+	enc, err := vault.EncryptToBase64WithAAD(key, tenantA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := vault.DecryptFromBase64WithAAD(enc, tenantA)
+	if err != nil {
+		t.Fatalf("decrypt with the right aad: %v", err)
+	}
+	if !bytes.Equal(got, key) {
+		t.Error("roundtrip mismatch")
+	}
+
+	// Ciphertext moved to another tenant's row must not decrypt.
+	if _, err := vault.DecryptFromBase64WithAAD(enc, tenantB); err == nil {
+		t.Error("decrypt with another tenant's aad must fail")
+	}
+	if _, err := vault.DecryptFromBase64(enc); err == nil {
+		t.Error("decrypt without aad must fail for an AAD-bound ciphertext")
+	}
+
+	// Existing (no-AAD) ciphertexts keep working with the original methods.
+	legacy, err := vault.EncryptToBase64(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := vault.DecryptFromBase64(legacy); err != nil || !bytes.Equal(got, key) {
+		t.Errorf("legacy roundtrip failed: %v", err)
+	}
+}

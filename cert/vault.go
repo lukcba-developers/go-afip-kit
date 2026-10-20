@@ -44,7 +44,18 @@ func NewKeyVaultFromBytes(key []byte) (*KeyVault, error) {
 
 // Encrypt encrypts plaintext using AES-256-GCM.
 // Returns nonce+ciphertext (nonce prepended).
+//
+// For multi-tenant storage prefer EncryptWithAAD, which binds the ciphertext
+// to its owner so it cannot be moved to another tenant's row.
 func (kv *KeyVault) Encrypt(plaintext []byte) ([]byte, error) {
+	return kv.EncryptWithAAD(plaintext, nil)
+}
+
+// EncryptWithAAD encrypts plaintext using AES-256-GCM, authenticating aad
+// (additional data, e.g. the tenant's CUIT) without storing it. Decryption
+// only succeeds with the same aad, so a ciphertext copied to another tenant's
+// row fails to decrypt instead of yielding that key.
+func (kv *KeyVault) EncryptWithAAD(plaintext, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(kv.masterKey)
 	if err != nil {
 		return nil, fmt.Errorf("keyvault encrypt: new cipher: %w", err)
@@ -60,11 +71,17 @@ func (kv *KeyVault) Encrypt(plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("keyvault encrypt: generate nonce: %w", err)
 	}
 
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	return gcm.Seal(nonce, nonce, plaintext, aad), nil
 }
 
 // Decrypt decrypts data encrypted by Encrypt (nonce+ciphertext).
 func (kv *KeyVault) Decrypt(ciphertext []byte) ([]byte, error) {
+	return kv.DecryptWithAAD(ciphertext, nil)
+}
+
+// DecryptWithAAD decrypts data encrypted by EncryptWithAAD. aad must match
+// the value used to encrypt.
+func (kv *KeyVault) DecryptWithAAD(ciphertext, aad []byte) ([]byte, error) {
 	block, err := aes.NewCipher(kv.masterKey)
 	if err != nil {
 		return nil, fmt.Errorf("keyvault decrypt: new cipher: %w", err)
@@ -81,7 +98,7 @@ func (kv *KeyVault) Decrypt(ciphertext []byte) ([]byte, error) {
 	}
 
 	nonce, ct := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	plaintext, err := gcm.Open(nil, nonce, ct, nil)
+	plaintext, err := gcm.Open(nil, nonce, ct, aad)
 	if err != nil {
 		return nil, fmt.Errorf("keyvault decrypt: %w", err)
 	}
@@ -100,9 +117,23 @@ func (kv *KeyVault) EncryptToBase64(plaintext []byte) (string, error) {
 
 // DecryptFromBase64 decodes base64 and decrypts (for reading from DB).
 func (kv *KeyVault) DecryptFromBase64(encoded string) ([]byte, error) {
+	return kv.DecryptFromBase64WithAAD(encoded, nil)
+}
+
+// EncryptToBase64WithAAD is EncryptWithAAD returning a base64 string.
+func (kv *KeyVault) EncryptToBase64WithAAD(plaintext, aad []byte) (string, error) {
+	encrypted, err := kv.EncryptWithAAD(plaintext, aad)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(encrypted), nil
+}
+
+// DecryptFromBase64WithAAD decodes base64 and decrypts with DecryptWithAAD.
+func (kv *KeyVault) DecryptFromBase64WithAAD(encoded string, aad []byte) ([]byte, error) {
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("keyvault: base64 decode: %w", err)
 	}
-	return kv.Decrypt(decoded)
+	return kv.DecryptWithAAD(decoded, aad)
 }
