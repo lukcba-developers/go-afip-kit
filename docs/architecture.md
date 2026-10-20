@@ -137,22 +137,37 @@ Todo lo demas es Go stdlib:
 
 ```
 error
-├── *afipkit.AFIPError      Errores de negocio AFIP (codigos 10000+)
-│   ├── IsAlreadyRegistered()  → reprocesar con FECompConsultar
+├── *afipkit.AFIPError      Errores de AFIP (Errors / Observaciones)
+│   ├── IsAlreadyRegistered()  → 10016: verificar con wsfev1.Recuperar
+│   ├── IsNotFound()           → 602: FECompConsultar sin datos
+│   ├── IsInternal()           → 500/501/502: resultado indeterminado
 │   ├── IsRetryable()          → puede reintentar (ej: 10016, 10013)
 │   └── !IsRetryable()        → error permanente (ej: 10048, 10005)
 │
 ├── *afipkit.ErrSOAP        Error de transporte SOAP
 ├── *afipkit.ErrWSAAAuth    Error de autenticacion WSAA
 ├── *afipkit.ErrCertificate Error de certificado
-└── *soap.Fault             SOAP Fault (servicio no disponible)
+├── *soap.Fault             SOAP Fault (siempre envuelto en ErrSOAP)
+├── afipkit.ErrIncompleteResponse   AFIP respondio sin resultado utilizable
+└── *wsfev1.ComprobanteNoCoincideError  (errors.Is ErrComprobanteNoCoincide)
+                            el numero esta registrado con otros datos
 ```
+
+### Resultado indeterminado
+
+`afipkit.IsIndeterminate(err)` devuelve `true` cuando no se sabe si AFIP
+autorizo el comprobante: `ErrSOAP` (red, timeout, HTTP, SOAP fault),
+`context.DeadlineExceeded`/`Canceled`, `ErrIncompleteResponse` y `AFIPError`
+500/501/502. En esos casos el comprobante queda pendiente y se confirma con
+`wsfev1.Recuperar`, que compara DocTipo, DocNro, ImpTotal y CbteFch con lo
+enviado. Devuelve `false` para rechazos de negocio, errores de validacion local
+y `ErrComprobanteNoCoincide`.
 
 ### Errores permanentes vs retryables
 
 | Codigo | Nombre | Retryable | Accion |
 |--------|--------|-----------|--------|
-| 10016 | Already registered | Si (idempotente) | Recuperar CAE con FECompConsultar |
+| 10016 | Numero/fecha no es el proximo a autorizar | Si (idempotente) | Verificar con Recuperar: si coincide, recuperar CAE |
 | 10013 | Invalid number | Si | Resincronizar con UltimoAutorizado |
 | 10005 | Invalid PV | No | Corregir config |
 | 10000 | Unauthorized | No | Verificar certificado/CUIT |

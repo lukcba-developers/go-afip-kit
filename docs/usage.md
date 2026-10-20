@@ -157,6 +157,18 @@ tipoCbte, err := fiscal.DeterminarTipoComprobante(
 )
 // tipoCbte == afipkit.CbteFacturaA (1)
 
+// RI -> Monotributista = Factura A (RG 5003) + leyenda obligatoria
+if fiscal.RequiereLeyendaRG5003(tipoCbte, afipkit.CondIVAMonotributo) {
+    // imprimir fiscal.LeyendaRG5003 en el PDF
+}
+
+// Identificacion del receptor (DNI, consumidor final, umbral de ARCA)
+docTipo, docNro, err := fiscal.DeterminarDocumento(
+    afipkit.CbteFacturaC, afipkit.DocDNI, 30111222, 15000.00, umbralIdentificacion)
+
+// Condicion IVA del receptor (RG 5616) admitida por la clase de comprobante
+err = fiscal.ValidarCondicionIVAReceptor(afipkit.CbteFacturaB, afipkit.CondIVAConsumidorFinal)
+
 // Validar cuadratura de importes
 err = fiscal.ValidarCuadratura(fiscal.Importes{
     ImpNeto:  100000.00,

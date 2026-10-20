@@ -5,18 +5,21 @@ Go client library for Argentina's **AFIP (ARCA)** electronic invoicing web servi
 Covers the full invoicing lifecycle: certificate management, WSAA authentication, WSFEv1 electronic invoicing, and Argentine fiscal rules — all in a standalone library with no framework or database dependencies.
 
 ```bash
-go get github.com/lukcba-developers/go-afip-kit@v0.1.1
+go get github.com/lukcba-developers/go-afip-kit@v0.3.0
 ```
+
+> Upgrading from v0.2.x? See [CHANGELOG.md](CHANGELOG.md) — v0.3.0 has breaking changes
+> (`CachedClient.Invalidate`, token cache keys, RI→Monotributista is now Factura A).
 
 ## Features
 
-- **WSAA Authentication** — CMS/PKCS#7 signed login with automatic token caching and renewal. Concurrent logins for the same CUIT+service are coalesced into a single LoginCms (WSAA rejects duplicates with `coe.alreadyAuthenticated`)
+- **WSAA Authentication** — CMS/PKCS#7 signed login with automatic token caching and renewal, cached separately per environment (homologacion/produccion). Concurrent logins for the same CUIT+service are coalesced into a single LoginCms (WSAA rejects duplicates with `coe.alreadyAuthenticated`)
 - **WSFEv1 Electronic Invoicing** — Emit invoices (Facturas A/B/C), credit notes, debit notes, and obtain CAE codes
-- **Idempotent Retries** — Built-in handling of error 10016 (already registered) with automatic CAE recovery, plus opt-in transport retries with exponential backoff (`soap.WithRetry`)
+- **Idempotent Retries** — `afipkit.IsIndeterminate` tells "AFIP may have authorized it" apart from a rejection; `wsfev1.Recuperar` confirms a comprobante after an outage (verifying it matches what was sent); `SolicitarCAEConReproceso` recovers the CAE on error 10016 only when the registered comprobante matches. Plus opt-in transport retries with exponential backoff (`soap.WithRetry`)
 - **Local Request Validation** — `FECAESolicitarRequest.Validate()` catches cuadratura mismatches (error 10048), missing service dates, and malformed amounts before spending an AFIP round-trip
 - **QR Codes (RG 4892)** — `qr.URL()` builds the mandatory AFIP QR payload with spec-correct types (numeric `codAut`)
 - **Certificate Management** — PEM parsing (PKCS#1/PKCS#8), validation, expiry checks, CUIT extraction, and AES-256-GCM encryption at rest
-- **Fiscal Rules** — Automatic comprobante type determination (A/B/C), amount validation with integer centavo arithmetic, IVA calculation, CUIT validation
+- **Fiscal Rules** — Automatic comprobante type determination (A/B/C, RG 5003), receptor identification (DNI, consumidor final, identification threshold), receptor IVA condition (RG 5616), amount validation with integer centavo arithmetic, IVA calculation, CUIT validation
 - **Homologacion & Production** — Single `production bool` flag switches between sandbox and live environments
 
 ## Packages
@@ -26,7 +29,7 @@ go get github.com/lukcba-developers/go-afip-kit@v0.1.1
 | `afipkit` (root) | Constants (comprobante types, IVA codes, currencies, documents) and shared error types |
 | `soap/` | Minimal SOAP 1.1 client — envelope wrapping, fault detection, opt-in retries, no WSDL |
 | `wsaa/` | WSAA authentication — `Client`, `CachedClient`, `TokenStore` interface, `IsAlreadyAuthenticated` |
-| `wsfev1/` | WSFEv1 invoicing — `SolicitarCAE`, `ConsultarComprobante`, request validation, parameter queries |
+| `wsfev1/` | WSFEv1 invoicing — `SolicitarCAE`, `Recuperar`, `ConsultarComprobante`, request validation, parameter queries |
 | `cert/` | Certificate parsing, validation, and `KeyVault` for encrypted private key storage |
 | `fiscal/` | Argentine fiscal rules — comprobante determination, amount validation, IVA calculation |
 | `qr/` | AFIP QR code URL builder (RG 4892) for printed/PDF comprobantes |
@@ -96,7 +99,7 @@ func main() {
     // 5. Get last authorized comprobante number
     cuit := int64(20123456789)
     ptoVta := 1
-    tipoCbte := afipkit.CbteFacturaB
+    tipoCbte := afipkit.CbteFacturaA
 
     ultimo, err := wsfe.UltimoAutorizado(ctx, token, cuit, ptoVta, tipoCbte)
     if err != nil {
@@ -130,6 +133,8 @@ func main() {
                 FchVtoPago:   "20260418",
                 MonId:        afipkit.MonedaPesos,
                 MonCotiz:     "1",
+                // RG 5616: condicion IVA del receptor (obligatoria)
+                CondicionIVAReceptorId: afipkit.CondIVAResponsableInscripto,
                 Iva: &wsfev1.IvaArray{
                     AlicIva: []wsfev1.AlicIvaItem{{
                         Id:      afipkit.IVA21,
@@ -141,10 +146,16 @@ func main() {
         },
     }
 
-    // SolicitarCAEConReproceso handles error 10016 automatically
+    // SolicitarCAEConReproceso recovers the CAE on error 10016 when the
+    // comprobante was already authorized with the same data.
     caeResult, err := wsfe.SolicitarCAEConReproceso(ctx, token, cuit, solicitud)
+    if afipkit.IsIndeterminate(err) {
+        // Unknown outcome (timeout, network, AFIP internal error): do NOT mark
+        // it as rejected. Keep it pending and confirm later with wsfe.Recuperar.
+        log.Fatalf("pendiente de confirmacion: %v", err)
+    }
     if err != nil {
-        log.Fatal(err)
+        log.Fatal(err) // rejected by AFIP or invalid request
     }
 
     fmt.Printf("CAE: %s (expires: %s)\n", caeResult.CAE, caeResult.CAEFchVto)
@@ -190,7 +201,43 @@ client := wsfev1.NewClient(production,
 )
 ```
 
-SOAP faults and 4xx responses are never retried — only network errors and 5xx without a fault. For `FECAESolicitar`, always pair retries with `SolicitarCAEConReproceso`: if the original request did reach AFIP, the retry gets error 10016 and the CAE is recovered automatically.
+SOAP faults and 4xx responses are never retried — only network errors and 5xx without a fault. For `FECAESolicitar`, always pair retries with `SolicitarCAEConReproceso`: if the original request did reach AFIP, the retry gets error 10016 and the CAE is recovered automatically (after checking that the registered comprobante matches the one sent).
+
+## Recovering After an Outage
+
+When `FECAESolicitar` times out or the connection drops, AFIP may or may not
+have authorized the comprobante. `afipkit.IsIndeterminate(err)` tells the two
+cases apart:
+
+| `IsIndeterminate` | Errors | Meaning |
+|---|---|---|
+| `true` | `*afipkit.ErrSOAP` (network, timeout, HTTP error, SOAP fault, malformed XML), `context.DeadlineExceeded` / `Canceled`, `afipkit.ErrIncompleteResponse`, `*AFIPError` 500/501/502 | Outcome unknown — keep it pending |
+| `false` | `*AFIPError` with business codes (header `Errors` or `Observaciones` with Resultado `R`), local validation errors, `wsfev1.ErrComprobanteNoCoincide`, `nil` | AFIP answered (or nothing was sent) |
+
+Confirm a pending comprobante with `Recuperar`:
+
+```go
+res, found, err := wsfe.Recuperar(ctx, token, cuit, ptoVta, tipoCbte, nro, &detalleEnviado)
+switch {
+case errors.Is(err, wsfev1.ErrComprobanteNoCoincide):
+    // The number is registered with OTHER data (emitted outside the system).
+    // Never reuse its CAE — needs manual review.
+case err != nil:
+    // Could not check (afipkit.IsIndeterminate(err) → try again later).
+case found:
+    // Authorized: res.CAE, res.CAEFchVto
+default:
+    // Not registered (AFIP error 602): emit again with the same number.
+}
+```
+
+`Recuperar` compares `DocTipo`, `DocNro`, `ImpTotal` (to the centavo) and
+`CbteFch` (when it was sent). `UltimoAutorizado` returns the last number
+authorized for a punto de venta + tipo.
+
+> AFIP error **10016** means "the number or date is not the next one to
+> authorize" — not "already registered". It shows up when a previous attempt
+> was authorized, but also with a skipped number or an out-of-range date.
 
 ## Fiscal Rules
 
@@ -203,8 +250,39 @@ tipoCbte, _ := fiscal.DeterminarTipoComprobante(
 // tipoCbte == afipkit.CbteFacturaA (1)
 
 // RI -> RI                        = Factura A
-// RI -> CF/Mono/Exento/NoResp     = Factura B
+// RI -> Mono                      = Factura A (RG 5003, needs fiscal.LeyendaRG5003)
+// RI -> CF/Exento/NoResp          = Factura B
 // Mono/Exento -> any              = Factura C
+
+if fiscal.RequiereLeyendaRG5003(tipoCbte, afipkit.CondIVAMonotributo) {
+    pdf.AddText(fiscal.LeyendaRG5003)
+}
+```
+
+### Receptor Identification
+
+```go
+// Validates and normalizes DocTipo/DocNro. Class A/M needs a valid CUIT;
+// B/C accepts CUIT/CUIL, DNI (96) or an unidentified consumidor final (99, 0)
+// below the threshold. The threshold is set by ARCA (RG 5700/2025: $10.000.000)
+// and is passed in, never hardcoded.
+docTipo, docNro, err := fiscal.DeterminarDocumento(
+    afipkit.CbteFacturaC, afipkit.DocSinIdentificar, 0, 15000.00, umbralIdentificacion)
+if errors.Is(err, fiscal.ErrReceptorNoIdentificado) {
+    // ask the buyer for CUIT/CUIL/DNI
+}
+```
+
+### Receptor IVA Condition (RG 5616)
+
+```go
+// CondicionIVAReceptorId codes: afipkit.CondIVAResponsableInscripto (1),
+// CondIVAExento (4), CondIVAConsumidorFinal (5), CondIVAMonotributo (6), ...
+err := fiscal.ValidarCondicionIVAReceptor(afipkit.CbteFacturaA, afipkit.CondIVAConsumidorFinal)
+// error: Consumidor Final cannot receive Factura A
+
+id, _ := fiscal.Monotributista.CondicionIVAReceptorID() // 6
+permitidas := fiscal.CondicionesIVAReceptorPermitidas("B") // [4 5 7 8 9 10 15]
 ```
 
 ### Amount Validation
@@ -296,6 +374,10 @@ decrypted, _ := vault.DecryptFromBase64(encrypted)
 
 ## Token Caching
 
+Tokens are cached under `wsaa:{homo|prod}:{cuit}:{service}`, so homologacion
+and produccion never share a token. `Invalidate(ctx, cuit, service, production)`
+drops the token of one environment only.
+
 The library includes `MemoryStore` for single-instance deployments. For multi-instance services, implement the `TokenStore` interface:
 
 ```go
@@ -360,8 +442,8 @@ if err != nil {
         fmt.Println("Code:", afipErr.FirstCode())
 
         if afipErr.IsAlreadyRegistered() {
-            // Error 10016: comprobante already authorized
-            // Recover CAE with ConsultarComprobante
+            // Error 10016: number/date is not the next to authorize.
+            // May mean it was already authorized: confirm with wsfe.Recuperar
         }
         if afipErr.IsInvalidPtoVta() {
             // Error 10005: punto de venta not configured
@@ -421,6 +503,22 @@ if err != nil {
 | `DocDNI` | 96 | DNI |
 | `DocSinIdentificar` | 99 | Sin identificar |
 
+### Receptor IVA Condition (RG 5616)
+
+| Constant | Code | Admitted classes |
+|----------|------|------------------|
+| `CondIVAResponsableInscripto` | 1 | A, M, C |
+| `CondIVAExento` | 4 | B, C |
+| `CondIVAConsumidorFinal` | 5 | B, C |
+| `CondIVAMonotributo` | 6 | A, M, C |
+| `CondIVANoCategorizado` | 7 | B, C |
+| `CondIVAProveedorExterior` | 8 | B, C |
+| `CondIVAClienteExterior` | 9 | B, C |
+| `CondIVALiberadoLey19640` | 10 | B, C |
+| `CondIVAMonotributistaSocial` | 13 | A, M, C |
+| `CondIVANoAlcanzado` | 15 | B, C |
+| `CondIVAMonotributoTIP` | 16 | A, M, C |
+
 ### Currencies
 
 | Constant | Code |
@@ -439,6 +537,7 @@ docs, _ := wsfe.TiposDocumento(ctx, token, cuit)
 monedas, _ := wsfe.TiposMonedas(ctx, token, cuit)
 cotiz, _ := wsfe.Cotizacion(ctx, token, cuit, afipkit.MonedaDolar)
 maxReg, _ := wsfe.MaxComprobantesPerRequest(ctx, token, cuit)
+conds, _ := wsfe.CondicionesIVAReceptor(ctx, token, cuit, "C") // RG 5616
 ```
 
 ## Requirements

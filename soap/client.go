@@ -52,7 +52,8 @@ func WithHTTPClient(hc *http.Client) Option {
 //
 // Note on FECAESolicitar: a retried request might hit AFIP after the original
 // was actually processed. Pair retries with wsfev1.SolicitarCAEConReproceso,
-// which recovers the CAE when AFIP answers 10016 (already registered).
+// which recovers the CAE when AFIP answers 10016 and the registered
+// comprobante matches the one sent.
 func WithRetry(maxRetries int, baseDelay time.Duration) Option {
 	return func(c *Client) {
 		c.maxRetries = maxRetries
