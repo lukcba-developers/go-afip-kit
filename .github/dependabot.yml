@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # Dependencias de Go (go.mod en la raíz) — todo en UN PR semanal.
+  # Es una librería: los consumidores heredan estas versiones mínimas, así que
+  # solo se suben minor/patch. Los major se evalúan a mano.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "America/Argentina/Buenos_Aires"
+    open-pull-requests-limit: 5
+    cooldown:
+      default-days: 3
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "go"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
