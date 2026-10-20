@@ -16,7 +16,7 @@ func TestDeterminarTipoComprobante(t *testing.T) {
 	}{
 		{"RI a RI = Factura A", ResponsableInscripto, ResponsableInscripto, afipkit.CbteFacturaA, false},
 		{"RI a CF = Factura B", ResponsableInscripto, ConsumidorFinal, afipkit.CbteFacturaB, false},
-		{"RI a Mono = Factura B", ResponsableInscripto, Monotributista, afipkit.CbteFacturaB, false},
+		{"RI a Mono = Factura A (RG 5003)", ResponsableInscripto, Monotributista, afipkit.CbteFacturaA, false},
 		{"RI a Exento = Factura B", ResponsableInscripto, Exento, afipkit.CbteFacturaB, false},
 		{"RI a NoResp = Factura B", ResponsableInscripto, NoResponsable, afipkit.CbteFacturaB, false},
 		{"Mono a RI = Factura C", Monotributista, ResponsableInscripto, afipkit.CbteFacturaC, false},

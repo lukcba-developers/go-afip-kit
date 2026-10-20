@@ -11,7 +11,8 @@ import (
 //
 // Rules:
 //   - RI -> RI:                          Factura A (1)
-//   - RI -> CF/Mono/Exento/NoResp:       Factura B (6)
+//   - RI -> Mono:                        Factura A (1), RG 5003 (ver LeyendaRG5003)
+//   - RI -> CF/Exento/NoResp:            Factura B (6)
 //   - Mono/Exento -> any:                Factura C (11)
 //
 // Returns 0 and an error for invalid or unsupported combinations.
@@ -19,9 +20,9 @@ func DeterminarTipoComprobante(emisor, receptor CondicionIVA) (int, error) {
 	switch emisor {
 	case ResponsableInscripto:
 		switch receptor {
-		case ResponsableInscripto:
+		case ResponsableInscripto, Monotributista:
 			return afipkit.CbteFacturaA, nil
-		case Monotributista, Exento, ConsumidorFinal, NoResponsable:
+		case Exento, ConsumidorFinal, NoResponsable:
 			return afipkit.CbteFacturaB, nil
 		default:
 			return 0, fmt.Errorf("fiscal: condicion IVA receptor desconocida: %d", receptor)
@@ -63,6 +64,9 @@ func DeterminarTipoND(tipoFactura int) (int, error) {
 // Rules:
 //   - Factura A always requires CUIT (80)
 //   - Factura B/C: CUIT if available, otherwise DocSinIdentificar (99)
+//
+// For DNI receptors and the mandatory identification threshold use
+// DeterminarDocumento.
 func DeterminarTipoDocumento(tipoCbte int, receptorCUIT int64) int {
 	switch tipoCbte {
 	case afipkit.CbteFacturaA, afipkit.CbteNotaCreditoA, afipkit.CbteNotaDebitoA:
