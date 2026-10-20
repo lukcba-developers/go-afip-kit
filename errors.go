@@ -1,6 +1,7 @@
 package afipkit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -51,12 +52,23 @@ func (e *AFIPError) HasCode(code int) bool {
 
 // Well-known AFIP error codes.
 const (
-	ErrCodeAlreadyRegistered = 10016 // Comprobante already authorized
+	// ErrCodeAlreadyRegistered (10016): CbteDesde/CbteFch no corresponde al
+	// próximo a autorizar. Tras un corte suele significar que el comprobante ya
+	// fue autorizado, pero también aparece con un número salteado o una fecha
+	// fuera de rango: hay que verificarlo con FECompConsultar (wsfev1.Recuperar),
+	// nunca asumirlo.
+	ErrCodeAlreadyRegistered = 10016
 	ErrCodeInvalidPtoVta     = 10005 // Invalid punto de venta
 	ErrCodeUnauthorized      = 10000 // CUIT not authorized
 	ErrCodeInvalidNumber     = 10013 // Invalid comprobante number
 	ErrCodeAmountMismatch    = 10048 // Amounts don't add up
 	ErrCodeReceiverNotID     = 10015 // Receiver not identified
+
+	// Errores de infraestructura de AFIP (estructura Errors, todos los métodos).
+	ErrCodeInternalApp = 500 // Error interno de aplicación
+	ErrCodeInternalDB  = 501 // Error interno de base de datos
+	ErrCodeInternalTx  = 502 // Error interno de base de datos - transacción activa
+	ErrCodeNotFound    = 602 // No existen datos en nuestros registros (FECompConsultar)
 )
 
 // permanentErrors are AFIP error codes that indicate a permanent failure.
@@ -68,8 +80,9 @@ var permanentErrors = map[int]bool{
 	ErrCodeReceiverNotID:  true, // missing receiver data
 }
 
-// IsAlreadyRegistered returns true if the comprobante was already authorized (error 10016).
-// This is the key error for idempotent retry — recover the CAE with FECompConsultar.
+// IsAlreadyRegistered returns true for error 10016 (número no es el próximo a
+// autorizar). It is the trigger for idempotent retry, but it does NOT prove the
+// comprobante exists: confirm it with FECompConsultar (wsfev1.Recuperar).
 func (e *AFIPError) IsAlreadyRegistered() bool { return e.HasCode(ErrCodeAlreadyRegistered) }
 
 // IsInvalidPtoVta returns true for punto de venta errors.
@@ -83,6 +96,15 @@ func (e *AFIPError) IsInvalidNumber() bool { return e.HasCode(ErrCodeInvalidNumb
 
 // IsAmountMismatch returns true when ImpTotal != sum of parts.
 func (e *AFIPError) IsAmountMismatch() bool { return e.HasCode(ErrCodeAmountMismatch) }
+
+// IsNotFound returns true when AFIP has no record for the query (error 602).
+func (e *AFIPError) IsNotFound() bool { return e.HasCode(ErrCodeNotFound) }
+
+// IsInternal returns true for AFIP infrastructure errors (500, 501, 502): the
+// service failed internally and did not give a business answer.
+func (e *AFIPError) IsInternal() bool {
+	return e.HasCode(ErrCodeInternalApp) || e.HasCode(ErrCodeInternalDB) || e.HasCode(ErrCodeInternalTx)
+}
 
 // IsRetryable returns true if the error might succeed on retry (e.g., network issues
 // or already-registered comprobantes). Permanent errors like invalid amounts or
@@ -112,6 +134,52 @@ func IsAFIPError(err error) (*AFIPError, bool) {
 		return afipErr, true
 	}
 	return nil, false
+}
+
+// ErrIncompleteResponse indicates AFIP answered but the response lacks the data
+// needed to know the outcome (e.g. FECAESolicitar without FeDetResp, or
+// Resultado "A" without CAE).
+var ErrIncompleteResponse = errors.New("afip: respuesta incompleta")
+
+// IsIndeterminate reports whether err, returned by wsfev1.SolicitarCAE or
+// wsfev1.SolicitarCAEConReproceso, leaves the outcome UNKNOWN: AFIP may or may
+// not have authorized the comprobante. The caller must not mark it as rejected;
+// it should keep it pending and confirm it later with wsfev1.Recuperar.
+//
+// Indeterminate (true):
+//   - *ErrSOAP: network failures, timeouts, HTTP errors, SOAP faults and
+//     malformed responses (every soap.Client.Call failure is wrapped in it).
+//   - context.DeadlineExceeded / context.Canceled anywhere in the chain.
+//   - ErrIncompleteResponse: AFIP answered without a usable result.
+//   - *AFIPError with an infrastructure code (500, 501, 502).
+//
+// Determinate (false):
+//   - nil.
+//   - *AFIPError with business codes: header Errors or detail Observaciones
+//     with Resultado "R" (10016, 10048, 10015, ...). AFIP processed the request
+//     and did not authorize it.
+//   - Local validation errors (FECAESolicitarRequest.Validate): nothing was sent.
+//   - wsfev1.ErrComprobanteNoCoincide: the number is taken by another
+//     comprobante — a conflict that needs human attention, not a retry.
+//   - Any other error not listed above.
+func IsIndeterminate(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	if errors.Is(err, ErrIncompleteResponse) {
+		return true
+	}
+	var soapErr *ErrSOAP
+	if errors.As(err, &soapErr) {
+		return true
+	}
+	if afipErr, ok := IsAFIPError(err); ok {
+		return afipErr.IsInternal()
+	}
+	return false
 }
 
 // --- Infrastructure errors ---
