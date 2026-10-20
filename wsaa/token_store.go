@@ -8,7 +8,8 @@ import (
 // TokenStore is the interface for caching WSAA tokens.
 //
 // Implementations may use Redis, in-memory maps, files, etc.
-// The key is typically "wsaa:{cuit}:{service}" (e.g. "wsaa:20123456789:wsfe").
+// CachedClient uses keys of the form "wsaa:{homo|prod}:{cuit}:{service}"
+// (e.g. "wsaa:prod:20123456789:wsfe"), so each environment has its own entry.
 type TokenStore interface {
 	// Get retrieves a cached token. Returns nil, nil if not found.
 	Get(ctx context.Context, key string) (*TokenAcceso, error)

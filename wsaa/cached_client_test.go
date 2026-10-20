@@ -88,3 +88,52 @@ func TestCachedClient_DifferentKeysDontBlock(t *testing.T) {
 		t.Fatalf("expected cache hit, got %d calls", n)
 	}
 }
+
+// TestCachedClient_SeparatesEnvironments verifies that homologacion and
+// produccion tokens for the same (cuit, service) never share a cache entry.
+func TestCachedClient_SeparatesEnvironments(t *testing.T) {
+	fake := &fakeAuthenticator{}
+	store := NewMemoryStore()
+	cc := NewCachedClient(nil, store)
+	cc.client = fake
+
+	ctx := context.Background()
+	const cuit = 20111111112
+	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(&fake.calls); n != 2 {
+		t.Fatalf("expected 2 LoginCms calls (one per environment), got %d", n)
+	}
+
+	for _, k := range []string{"wsaa:homo:20111111112:wsfe", "wsaa:prod:20111111112:wsfe"} {
+		if tok, _ := store.Get(ctx, k); tok == nil {
+			t.Errorf("expected token cached under %q", k)
+		}
+	}
+
+	// Invalidating homologacion must not touch produccion.
+	if err := cc.Invalidate(ctx, cuit, "wsfe", false); err != nil {
+		t.Fatal(err)
+	}
+	if tok, _ := store.Get(ctx, "wsaa:homo:20111111112:wsfe"); tok != nil {
+		t.Error("homo token should have been invalidated")
+	}
+	if tok, _ := store.Get(ctx, "wsaa:prod:20111111112:wsfe"); tok == nil {
+		t.Error("prod token should survive invalidating homo")
+	}
+
+	// Next homo call re-authenticates; prod still hits the cache.
+	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", true); err != nil {
+		t.Fatal(err)
+	}
+	if n := atomic.LoadInt32(&fake.calls); n != 3 {
+		t.Fatalf("expected 3 LoginCms calls, got %d", n)
+	}
+}
