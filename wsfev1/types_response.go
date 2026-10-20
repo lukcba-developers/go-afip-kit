@@ -225,6 +225,23 @@ type ParamCotizacion struct {
 	FchDesde   string `xml:"FchDesde"`
 }
 
+// FEParamGetCondicionIvaReceptorResponse lists the receptor IVA conditions
+// (RG 5616) and the comprobante classes each one admits.
+type FEParamGetCondicionIvaReceptorResponse struct {
+	XMLName                              xml.Name `xml:"FEParamGetCondicionIvaReceptorResponse"`
+	FEParamGetCondicionIvaReceptorResult struct {
+		ResultGet []ParamCondicionIvaReceptor `xml:"ResultGet>CondicionIvaReceptor"`
+		Errors    *ErrorsArray                `xml:"Errors,omitempty"`
+	} `xml:"FEParamGetCondicionIvaReceptorResult"`
+}
+
+// ParamCondicionIvaReceptor is a receptor IVA condition entry.
+type ParamCondicionIvaReceptor struct {
+	Id       int    `xml:"Id"`
+	Desc     string `xml:"Desc"`
+	CmpClase string `xml:"Cmp_Clase"` // e.g. "A/M/C", "B/C"
+}
+
 // FECompTotXRequestResponse returns max comprobantes per request.
 type FECompTotXRequestResponse struct {
 	XMLName                   xml.Name `xml:"FECompTotXRequestResponse"`

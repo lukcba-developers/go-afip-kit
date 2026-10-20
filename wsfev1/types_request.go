@@ -170,3 +170,14 @@ type FEParamGetCotizacionRequest struct {
 	Auth    Auth     `xml:"Auth"`
 	MonId   string   `xml:"MonId"`
 }
+
+// --- FEParamGetCondicionIvaReceptor ---
+
+// FEParamGetCondicionIvaReceptorRequest asks for the receptor IVA conditions,
+// optionally filtered by comprobante class.
+type FEParamGetCondicionIvaReceptorRequest struct {
+	XMLName  xml.Name `xml:"FEParamGetCondicionIvaReceptor"`
+	XMLNS    string   `xml:"xmlns,attr"`
+	Auth     Auth     `xml:"Auth"`
+	ClaseCmp string   `xml:"ClaseCmp,omitempty"`
+}

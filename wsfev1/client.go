@@ -506,6 +506,28 @@ func (c *Client) Cotizacion(ctx context.Context, token *wsaa.TokenAcceso, cuit i
 	return result.ResultGet, nil
 }
 
+// CondicionesIVAReceptor returns the receptor IVA conditions (RG 5616,
+// FEParamGetCondicionIvaReceptor) admitted for claseCmp: "A", "B", "C", "ALEY"
+// (A con leyenda "operación sujeta a retención") or "49" (bienes usados).
+// An empty claseCmp lists every condition with all its classes.
+func (c *Client) CondicionesIVAReceptor(ctx context.Context, token *wsaa.TokenAcceso, cuit int64, claseCmp string) ([]ParamCondicionIvaReceptor, error) {
+	req := FEParamGetCondicionIvaReceptorRequest{
+		XMLNS:    wsfeNS,
+		Auth:     c.auth(token, cuit),
+		ClaseCmp: claseCmp,
+	}
+	var resp FEParamGetCondicionIvaReceptorResponse
+
+	if err := c.soap.Call(ctx, c.url(), actionCondIvaReceptor, &req, &resp); err != nil {
+		return nil, &afipkit.ErrSOAP{Err: err}
+	}
+	result := resp.FEParamGetCondicionIvaReceptorResult
+	if afipErr := errorsToAFIP(result.Errors); afipErr != nil {
+		return nil, afipErr
+	}
+	return result.ResultGet, nil
+}
+
 // MaxComprobantesPerRequest returns the maximum number of comprobantes
 // allowed in a single FECAESolicitar call.
 func (c *Client) MaxComprobantesPerRequest(ctx context.Context, token *wsaa.TokenAcceso, cuit int64) (int, error) {
