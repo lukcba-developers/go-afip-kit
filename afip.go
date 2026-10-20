@@ -44,6 +44,24 @@ const (
 	DocSinIdentificar = 99
 )
 
+// Condicion frente al IVA del receptor (RG 5616), campo CondicionIVAReceptorId
+// de FECAEDetRequest. Codigos del catalogo FEParamGetCondicionIvaReceptor
+// segun el manual WSFEv1 de ARCA (revision 01/09/2026). Los codigos 2, 3, 11,
+// 12 y 14 no existen en el catalogo.
+const (
+	CondIVAResponsableInscripto = 1  // IVA Responsable Inscripto
+	CondIVAExento               = 4  // IVA Sujeto Exento
+	CondIVAConsumidorFinal      = 5  // Consumidor Final
+	CondIVAMonotributo          = 6  // Responsable Monotributo
+	CondIVANoCategorizado       = 7  // Sujeto No Categorizado
+	CondIVAProveedorExterior    = 8  // Proveedor del Exterior
+	CondIVAClienteExterior      = 9  // Cliente del Exterior
+	CondIVALiberadoLey19640     = 10 // IVA Liberado - Ley N° 19.640
+	CondIVAMonotributistaSocial = 13 // Monotributista Social
+	CondIVANoAlcanzado          = 15 // IVA No Alcanzado
+	CondIVAMonotributoTIP       = 16 // Monotributo Trabajador Independiente Promovido
+)
+
 // Alicuotas de IVA (codigos AFIP)
 const (
 	IVANoGravado = 1  // No gravado
