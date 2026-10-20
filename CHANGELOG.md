@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.1 (sin publicar)
+
+Correcciones de seguridad surgidas de la auditoría del 20/10/2026.
+
+- **wsaa:** el TRA se firma con SHA-256. Antes usaba SHA-1, el default de
+  `pkcs7.NewSignedData`.
+- **soap:** las respuestas se leen con un tope de 10 MiB
+  (`DefaultMaxResponseSize`, configurable con `soap.WithMaxResponseSize`).
+- **soap:** el cliente HTTP por defecto no sigue redirects, para que el token
+  y el sign no se reenvíen a otro host. Un `WithHTTPClient` propio conserva su
+  política.
+- **cert:** `Validate` y `ValidateCertOnly` devuelven error si `expectedCUIT`
+  no es un CUIT de 11 dígitos. Antes salteaban el chequeo en silencio. Con
+  `""` se sigue salteando.
+
 ## v0.3.0
 
 ### Breaking changes
