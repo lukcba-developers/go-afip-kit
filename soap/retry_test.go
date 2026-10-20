@@ -134,3 +134,44 @@ func TestCall_NoRetryOn4xx(t *testing.T) {
 		t.Fatalf("4xx must not be retried, got %d attempts", n)
 	}
 }
+
+func TestCall_ResponseSizeLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(okEnvelope))
+	}))
+	defer srv.Close()
+
+	var resp pingResponse
+	small := NewClient(WithMaxResponseSize(int64(len(okEnvelope)) - 1))
+	if err := small.Call(context.Background(), srv.URL, "", &pingRequest{}, &resp); err == nil {
+		t.Fatal("expected error for response over the limit")
+	}
+
+	exact := NewClient(WithMaxResponseSize(int64(len(okEnvelope))))
+	if err := exact.Call(context.Background(), srv.URL, "", &pingRequest{}, &resp); err != nil {
+		t.Fatalf("response at the limit should succeed: %v", err)
+	}
+}
+
+func TestCall_DoesNotFollowRedirects(t *testing.T) {
+	var targetCalls int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&targetCalls, 1)
+		_, _ = w.Write([]byte(okEnvelope))
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect) // 307 resends the body
+	}))
+	defer redirector.Close()
+
+	var resp pingResponse
+	err := NewClient().Call(context.Background(), redirector.URL, "", &pingRequest{}, &resp)
+	if err == nil {
+		t.Fatal("expected error on redirect")
+	}
+	if n := atomic.LoadInt32(&targetCalls); n != 0 {
+		t.Fatalf("request (with credentials) was forwarded to the redirect target %d time(s)", n)
+	}
+}

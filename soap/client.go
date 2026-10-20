@@ -16,12 +16,18 @@ import (
 	"time"
 )
 
+// DefaultMaxResponseSize caps how much of a response body is read (10 MiB).
+// AFIP responses are a few KB; the cap protects against a misbehaving or
+// spoofed endpoint exhausting memory.
+const DefaultMaxResponseSize = 10 << 20
+
 // Client is a SOAP 1.1 HTTP client.
 type Client struct {
-	httpClient *http.Client
-	maxRetries int
-	retryBase  time.Duration
-	logger     *slog.Logger
+	httpClient      *http.Client
+	maxRetries      int
+	retryBase       time.Duration
+	logger          *slog.Logger
+	maxResponseSize int64
 }
 
 // Option configures the SOAP client.
@@ -34,7 +40,9 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithHTTPClient replaces the underlying HTTP client entirely.
+// WithHTTPClient replaces the underlying HTTP client entirely. The caller's
+// client keeps its own redirect policy; the default client never follows
+// redirects (see NewClient).
 func WithHTTPClient(hc *http.Client) Option {
 	return func(c *Client) {
 		c.httpClient = hc
@@ -61,6 +69,14 @@ func WithRetry(maxRetries int, baseDelay time.Duration) Option {
 	}
 }
 
+// WithMaxResponseSize sets the maximum response body size in bytes. Larger
+// responses fail with an error. Default is DefaultMaxResponseSize.
+func WithMaxResponseSize(n int64) Option {
+	return func(c *Client) {
+		c.maxResponseSize = n
+	}
+}
+
 // WithLogger sets a logger for retry attempts. Without it, retries are silent.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *Client) {
@@ -69,9 +85,19 @@ func WithLogger(l *slog.Logger) Option {
 }
 
 // NewClient creates a SOAP client with the given options.
+//
+// The default HTTP client does not follow redirects: the request body carries
+// the WSAA token and sign, and a 307/308 would resend it to whatever host the
+// redirect points to. A redirect response fails as an HTTP error instead.
 func NewClient(opts ...Option) *Client {
 	c := &Client{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: &http.Client{
+			Timeout: 30 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		maxResponseSize: DefaultMaxResponseSize,
 	}
 	for _, o := range opts {
 		o(c)
@@ -182,11 +208,14 @@ func (c *Client) post(ctx context.Context, url, soapAction string, body []byte) 
 			continue // network error — retryable
 		}
 
-		respBody, err := io.ReadAll(resp.Body)
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, c.maxResponseSize+1))
 		resp.Body.Close()
 		if err != nil {
 			lastErr = fmt.Errorf("soap: read response: %w", err)
 			continue // truncated read — retryable
+		}
+		if int64(len(respBody)) > c.maxResponseSize {
+			return nil, fmt.Errorf("soap: response exceeds %d bytes", c.maxResponseSize)
 		}
 
 		if resp.StatusCode != http.StatusOK {
