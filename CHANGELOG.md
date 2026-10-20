@@ -14,6 +14,17 @@ Correcciones de seguridad surgidas de la auditoría del 20/10/2026.
 - **cert:** `Validate` y `ValidateCertOnly` devuelven error si `expectedCUIT`
   no es un CUIT de 11 dígitos. Antes salteaban el chequeo en silencio. Con
   `""` se sigue salteando.
+- **cert:** nuevos `KeyVault.EncryptWithAAD` / `DecryptWithAAD` (y sus
+  variantes base64), que atan la clave cifrada a su dueño (por ejemplo el
+  CUIT). Los métodos sin AAD no cambian.
+- **go.mod:** el mínimo pasa de Go 1.24.5 a **Go 1.26.9**. Go 1.24 ya no tiene
+  soporte y con versiones anteriores a 1.26.9 govulncheck marca
+  vulnerabilidades alcanzables de la stdlib (net/http, HTTP/2, crypto/tls) en
+  el cliente SOAP. Con `GOTOOLCHAIN=auto` (el default), Go descarga la
+  toolchain necesaria.
+- **CI:** build, vet y tests con `-race` en Go 1.26.9 y en la última estable,
+  más govulncheck en cada push, en cada PR y una vez por semana. Dependabot
+  actualiza también las GitHub Actions.
 
 ## v0.3.0
 

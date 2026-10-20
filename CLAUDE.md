@@ -39,13 +39,13 @@ The module is `github.com/lukcba-developers/go-afip-kit`. Only external dependen
 
 2. **`wsaa/`** — WSAA authentication (LoginCms). Signs a TRA (Ticket de Requerimiento de Acceso) with PKCS#7/CMS, sends it to WSAA, gets back a `TokenAcceso` (token + sign + expiration). `CachedClient` wraps `Client` with a `TokenStore` interface for automatic token caching/renewal. `MemoryStore` is the built-in in-memory implementation; users implement `TokenStore` for Redis etc.
 
-3. **`wsfev1/`** — WSFEv1 electronic invoicing client. `SolicitarCAE` emits comprobantes, `SolicitarCAEConReproceso` adds idempotent retry (handles error 10016 by recovering the CAE via `ConsultarComprobante`). Also exposes parameter queries (tipos de comprobante, IVA, monedas, puntos de venta, cotizacion).
+3. **`wsfev1/`** — WSFEv1 electronic invoicing client. `SolicitarCAE` emits comprobantes, `SolicitarCAEConReproceso` adds idempotent retry: on error 10016 it calls `Recuperar`, which queries `FECompConsultar` and returns the CAE only if the registered comprobante matches the one sent (otherwise `ErrComprobanteNoCoincide`). `Recuperar` is also the way to confirm a comprobante after an indeterminate failure (`afipkit.IsIndeterminate`). Also exposes parameter queries (tipos de comprobante, IVA, monedas, puntos de venta, cotizacion).
 
 4. **`cert/`** — Certificate utilities: PEM parsing (PKCS#1 and PKCS#8), validation (expiry, CUIT extraction, TLS pairing), and `KeyVault` for AES-256-GCM encryption of private keys at rest.
 
-5. **`fiscal/`** — Argentine fiscal rules: `DeterminarTipoComprobante` (RI→RI=A, RI→CF=B, Mono/Exento→C), amount validation (`ValidarCuadratura` uses integer centavo arithmetic to avoid float issues), IVA calculation, AFIP date format helpers (YYYYMMDD).
+5. **`fiscal/`** — Argentine fiscal rules: `DeterminarTipoComprobante` (RI→RI=A, RI→Mono=A per RG 5003, RI→CF=B, Mono/Exento→C), receptor identification (`DeterminarDocumento`), receptor IVA condition per comprobante class (RG 5616), amount validation (`ValidarCuadratura` uses integer centavo arithmetic to avoid float issues), IVA calculation, AFIP date format helpers (YYYYMMDD).
 
-6. **Root package (`afipkit`)** — Constants (comprobante types, document types, IVA codes, currencies, environments) and shared error types (`AFIPError` with well-known codes like 10016, `ErrSOAP`, `ErrWSAAAuth`, `ErrCertificate`).
+6. **Root package (`afipkit`)** — Constants (comprobante types, document types, IVA codes, receptor IVA conditions `CondIVA*`, currencies, environments) and shared error types (`AFIPError` with well-known codes like 10016 and 602, `ErrSOAP`, `ErrWSAAAuth`, `ErrCertificate`, `ErrIncompleteResponse`) plus `IsIndeterminate`.
 
 **Key patterns:**
 - All SOAP types use `encoding/xml` struct tags matching AFIP's WSDL exactly
@@ -60,6 +60,8 @@ The module is `github.com/lukcba-developers/go-afip-kit`. Only external dependen
 
 - AFIP dates are YYYYMMDD strings, not `time.Time`
 - Comprobante = invoice/receipt. CAE = authorization code returned by AFIP
-- Error 10016 = comprobante already registered (idempotent — recover CAE with `FECompConsultar`)
-- `CondicionIVA` determines invoice letter: RI→RI = A, RI→consumer = B, Monotributo = C
+- Error 10016 = "CbteDesde/CbteFch is not the next to authorize" (per the ARCA manual), NOT "already registered". It may mean a previous attempt was authorized — confirm with `Recuperar` and never reuse a CAE without checking the data matches
+- Error 602 = FECompConsultar found no record
+- `CondicionIVA` determines invoice letter: RI→RI = A, RI→Monotributista = A (RG 5003), RI→consumer = B, Monotributo = C
+- WSAA tokens are cached per environment: key `wsaa:{homo|prod}:{cuit}:{service}`
 - Homologacion = AFIP's testing/sandbox environment

@@ -365,11 +365,14 @@ result, err := cert.ValidateCertOnly(certPEM, "20123456789")
 // Create vault with 32-byte master key (64 hex chars)
 vault, err := cert.NewKeyVault(os.Getenv("AFIP_MASTER_KEY"))
 
-// Encrypt for database storage
-encrypted, _ := vault.EncryptToBase64(keyPEM)
+// Encrypt for database storage, bound to its owner (AAD): a ciphertext copied
+// to another tenant's row fails to decrypt.
+encrypted, _ := vault.EncryptToBase64WithAAD(keyPEM, []byte(cuit))
 
-// Decrypt when needed
-decrypted, _ := vault.DecryptFromBase64(encrypted)
+// Decrypt when needed, with the same owner
+decrypted, _ := vault.DecryptFromBase64WithAAD(encrypted, []byte(cuit))
+
+// EncryptToBase64 / DecryptFromBase64 (no AAD) keep working for existing data.
 ```
 
 ## Token Caching
@@ -422,6 +425,11 @@ func (r *RedisTokenStore) Delete(ctx context.Context, key string) error {
 store := &RedisTokenStore{client: redisClient}
 cached := wsaa.NewCachedClient(wsaaClient, store)
 ```
+
+> **Protect the store.** Token and sign are bearer credentials valid for up to
+> 12 hours for that CUIT and service. Use a Redis with AUTH and TLS (or a
+> private network), or encrypt the value in your `TokenStore` (e.g. with
+> `cert.KeyVault`).
 
 > **Use a persistent store in production.** WSAA refuses to issue a new TA while a
 > previous one is still valid (fault `coe.alreadyAuthenticated`). With `MemoryStore`,
@@ -542,7 +550,7 @@ conds, _ := wsfe.CondicionesIVAReceptor(ctx, token, cuit, "C") // RG 5616
 
 ## Requirements
 
-- Go 1.24+
+- Go 1.26.9+ (the minimum patch without known standard-library vulnerabilities)
 - AFIP certificate (.crt) and private key (.key) for the CUIT to operate
 - Punto de venta configured in AFIP for electronic invoicing
 
