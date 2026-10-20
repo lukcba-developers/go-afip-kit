@@ -15,6 +15,9 @@ import (
 // cuitDigitsRegex matches exactly 11 digits.
 var cuitDigitsRegex = regexp.MustCompile(`^\d{11}$`)
 
+// cuitSearchRegex finds 11 consecutive digits within a string.
+var cuitSearchRegex = regexp.MustCompile(`\d{11}`)
+
 // ValidationResult contains details from certificate validation.
 type ValidationResult struct {
 	// Subject is the certificate's subject string.
@@ -124,12 +127,13 @@ func checkValidity(cert *x509.Certificate) error {
 
 // matchCUIT verifies that the certificate's SerialNumber contains the expected CUIT.
 // Extracts the 11-digit CUIT from both values and performs exact comparison.
+// An expectedCUIT without 11 digits is an error, never a skipped check.
 func matchCUIT(cert *x509.Certificate, expectedCUIT string) error {
 	normalizedSerial := extractCUIT(cert.Subject.SerialNumber)
 	normalizedExpected := extractCUIT(expectedCUIT)
 
 	if normalizedExpected == "" {
-		return nil
+		return fmt.Errorf("CUIT esperado invalido: %q", expectedCUIT)
 	}
 
 	if normalizedSerial != normalizedExpected {
@@ -153,7 +157,5 @@ func extractCUIT(s string) string {
 	}
 
 	// Try to find 11 consecutive digits within the string
-	digits := regexp.MustCompile(`\d{11}`)
-	match := digits.FindString(s)
-	return match
+	return cuitSearchRegex.FindString(s)
 }

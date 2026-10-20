@@ -184,6 +184,25 @@ func TestValidateCertOnly_Success(t *testing.T) {
 	}
 }
 
+func TestValidate_InvalidExpectedCUITFailsClosed(t *testing.T) {
+	certPEM, keyPEM, err := generateTestCertAndKey("CUIT 20123456789", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"abc", "2012345678", "20-1234-5"} {
+		if _, err := Validate(certPEM, keyPEM, expected); err == nil {
+			t.Errorf("Validate with expectedCUIT %q must fail, not skip the check", expected)
+		}
+		if _, err := ValidateCertOnly(certPEM, expected); err == nil {
+			t.Errorf("ValidateCertOnly with expectedCUIT %q must fail, not skip the check", expected)
+		}
+	}
+	// An empty expectedCUIT still skips the check, as documented.
+	if _, err := Validate(certPEM, keyPEM, ""); err != nil {
+		t.Errorf("empty expectedCUIT should skip the check: %v", err)
+	}
+}
+
 func TestExtractCUIT(t *testing.T) {
 	tests := []struct{ input, expected string }{
 		{"20123456789", "20123456789"},
