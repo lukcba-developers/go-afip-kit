@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.3.2
+
+- **deps:** `go.mozilla.org/pkcs7` pasa de v0.9.0 a v0.10.0. La única
+  diferencia son controles de límites en el parser BER (`ber2der`) para
+  datos malformados. La librería solo firma, no parsea, así que no cambia
+  el comportamiento.
+- **CI:** govulncheck se instala a mano y la instalación y
+  `go mod download` se reintentan ante cortes transitorios del proxy de Go
+  (`.github/scripts/retry.sh`).
+
+Sin cambios de API. La firma del TRA con SHA-256 (v0.3.1) sigue pendiente de
+verificar contra el WSAA real de homologación.
+
 ## v0.3.1
 
 Correcciones de seguridad surgidas de la auditoría del 20/10/2026.
