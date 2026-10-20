@@ -1,8 +1,12 @@
 # Changelog
 
-## v0.3.1 (sin publicar)
+## v0.3.1
 
 Correcciones de seguridad surgidas de la auditoría del 20/10/2026.
+
+> La firma del TRA con SHA-256 tiene tests, pero todavía no se probó contra el
+> WSAA real de homologación. Si WSAA la rechazara, `Authenticate` fallaría con
+> `ErrWSAAAuth`. En ese caso se publica una versión de parche.
 
 - **wsaa:** el TRA se firma con SHA-256. Antes usaba SHA-1, el default de
   `pkcs7.NewSignedData`.

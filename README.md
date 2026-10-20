@@ -5,7 +5,7 @@ Go client library for Argentina's **AFIP (ARCA)** electronic invoicing web servi
 Covers the full invoicing lifecycle: certificate management, WSAA authentication, WSFEv1 electronic invoicing, and Argentine fiscal rules — all in a standalone library with no framework or database dependencies.
 
 ```bash
-go get github.com/lukcba-developers/go-afip-kit@v0.3.0
+go get github.com/lukcba-developers/go-afip-kit@v0.3.1
 ```
 
 > Upgrading from v0.2.x? See [CHANGELOG.md](CHANGELOG.md) — v0.3.0 has breaking changes
