@@ -32,6 +32,9 @@ type authenticator interface {
 // previous TA is still valid (fault coe.alreadyAuthenticated) — without
 // coalescing, concurrent callers on a cache miss would race and all but the
 // first would fail.
+//
+// That coalescing is per process. With several replicas sharing the
+// TokenStore, configure WithLocker so only one replica calls LoginCms.
 type CachedClient struct {
 	client        authenticator
 	store         TokenStore
@@ -40,6 +43,10 @@ type CachedClient struct {
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex // one lock per cache key
+
+	locker   Locker // optional, coalesces logins across processes
+	lockTTL  time.Duration
+	lockPoll time.Duration
 }
 
 // CachedOption configures the CachedClient.
@@ -60,6 +67,24 @@ func WithCacheLogger(l *slog.Logger) CachedOption {
 	}
 }
 
+// WithLocker enables a distributed lock so that only one process at a time
+// calls LoginCms for a given (environment, cuit, service). The others wait,
+// polling the TokenStore, and reuse the token the winner stored. Use it when
+// several replicas share the TokenStore.
+func WithLocker(l Locker) CachedOption {
+	return func(cc *CachedClient) {
+		cc.locker = l
+	}
+}
+
+// WithLockTTL sets how long the distributed lock is held at most (default
+// DefaultLockTTL). It must exceed the LoginCms duration.
+func WithLockTTL(d time.Duration) CachedOption {
+	return func(cc *CachedClient) {
+		cc.lockTTL = d
+	}
+}
+
 // NewCachedClient creates a CachedClient that caches tokens in the given store.
 func NewCachedClient(client *Client, store TokenStore, opts ...CachedOption) *CachedClient {
 	cc := &CachedClient{
@@ -67,6 +92,8 @@ func NewCachedClient(client *Client, store TokenStore, opts ...CachedOption) *Ca
 		store:         store,
 		renewalMargin: DefaultRenewalMargin,
 		locks:         make(map[string]*sync.Mutex),
+		lockTTL:       DefaultLockTTL,
+		lockPoll:      defaultLockPoll,
 	}
 	for _, o := range opts {
 		o(cc)
@@ -99,17 +126,14 @@ func (cc *CachedClient) keyLock(k string) *sync.Mutex {
 
 // Authenticate returns a cached token if still valid, otherwise obtains a new
 // one from WSAA and caches it. Concurrent calls for the same
-// (environment, cuit, service) share a single LoginCms request.
+// (environment, cuit, service) share a single LoginCms request: within the
+// process always, and across processes when WithLocker is configured.
 func (cc *CachedClient) Authenticate(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, cuit int64, service string, production bool) (*TokenAcceso, error) {
 	k := cacheKey(cuit, service, production)
 
 	// Fast path: valid cached token, no lock needed.
-	token, err := cc.store.Get(ctx, k)
-	if err != nil {
-		return nil, fmt.Errorf("token store get: %w", err)
-	}
-	if token != nil && !token.IsExpired(cc.renewalMargin) {
-		return token, nil
+	if token, err := cc.cached(ctx, k); err != nil || token != nil {
+		return token, err
 	}
 
 	// Slow path: serialize per key so only one goroutine hits WSAA.
@@ -119,16 +143,82 @@ func (cc *CachedClient) Authenticate(ctx context.Context, cert *x509.Certificate
 
 	// Re-check the store: another goroutine may have refreshed the token
 	// while we waited for the lock.
-	token, err = cc.store.Get(ctx, k)
+	if token, err := cc.cached(ctx, k); err != nil || token != nil {
+		return token, err
+	}
+
+	if cc.locker != nil {
+		return cc.loginLocked(ctx, cert, key, k, service, production)
+	}
+	return cc.login(ctx, cert, key, k, service, production)
+}
+
+// cached returns the stored token if it is still valid, or nil.
+func (cc *CachedClient) cached(ctx context.Context, k string) (*TokenAcceso, error) {
+	token, err := cc.store.Get(ctx, k)
 	if err != nil {
 		return nil, fmt.Errorf("token store get: %w", err)
 	}
 	if token != nil && !token.IsExpired(cc.renewalMargin) {
 		return token, nil
 	}
+	return nil, nil
+}
 
-	token, err = cc.client.Authenticate(ctx, cert, key, service, production)
+// loginLocked takes the distributed lock before calling LoginCms. While another
+// process holds it, it polls the store for the token that process will save.
+func (cc *CachedClient) loginLocked(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool) (*TokenAcceso, error) {
+	lockKey := k + ":lock"
+	owner, err := newLockOwner()
 	if err != nil {
+		return nil, fmt.Errorf("wsaa: lock owner: %w", err)
+	}
+
+	for {
+		acquired, err := cc.locker.TryLock(ctx, lockKey, owner, cc.lockTTL)
+		if err != nil {
+			return nil, fmt.Errorf("wsaa: distributed lock %s: %w", lockKey, err)
+		}
+		if acquired {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("wsaa: waiting for distributed lock %s: %w", lockKey, ctx.Err())
+		case <-time.After(cc.lockPoll):
+		}
+		if token, err := cc.cached(ctx, k); err != nil || token != nil {
+			return token, err
+		}
+	}
+
+	defer func() {
+		// Release even if ctx was canceled; the TTL covers a failed release.
+		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err := cc.locker.Unlock(uctx, lockKey, owner); err != nil && cc.logger != nil {
+			cc.logger.Warn("wsaa: distributed unlock failed", "key", lockKey, "error", err)
+		}
+	}()
+
+	// The previous holder may have stored a token right before releasing.
+	if token, err := cc.cached(ctx, k); err != nil || token != nil {
+		return token, err
+	}
+	return cc.login(ctx, cert, key, k, service, production)
+}
+
+// login calls LoginCms and stores the token.
+func (cc *CachedClient) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool) (*TokenAcceso, error) {
+	token, err := cc.client.Authenticate(ctx, cert, key, service, production)
+	if err != nil {
+		// Another process (without the lock, e.g. an older deploy) may have
+		// just logged in and stored its token: reuse it if so.
+		if IsAlreadyAuthenticated(err) {
+			if cachedToken, cErr := cc.cached(ctx, k); cErr == nil && cachedToken != nil {
+				return cachedToken, nil
+			}
+		}
 		return nil, err
 	}
 

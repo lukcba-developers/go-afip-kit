@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.4.0
+
+- **wsaa:** lock distribuido opcional para coalescer los LoginCms entre
+  procesos. Antes, con varias réplicas compartiendo el `TokenStore`, dos de
+  ellas podían hacer LoginCms a la vez y WSAA rechazaba la segunda con
+  `coe.alreadyAuthenticated`.
+  - Nueva interfaz `wsaa.Locker` (`TryLock` / `Unlock` con owner y TTL), con
+    ejemplo de Redis en el README.
+  - Opciones `wsaa.WithLocker` y `wsaa.WithLockTTL`, y la constante
+    `wsaa.DefaultLockTTL` (60 s).
+  - `wsaa.MemoryLocker` / `NewMemoryLocker`, implementación en proceso para
+    tests.
+  - La clave del lock es la clave del token más `:lock`.
+- **wsaa:** si LoginCms responde `coe.alreadyAuthenticated` y el store ya
+  tiene un token válido guardado por otro proceso, `CachedClient.Authenticate`
+  devuelve ese token en lugar del error.
+
+Sin cambios de firmas existentes. Sin `WithLocker` el comportamiento es el de
+v0.3.2.
+
 ## v0.3.2
 
 - **deps:** `go.mozilla.org/pkcs7` pasa de v0.9.0 a v0.10.0. La única

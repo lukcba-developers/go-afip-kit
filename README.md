@@ -5,7 +5,7 @@ Go client library for Argentina's **AFIP (ARCA)** electronic invoicing web servi
 Covers the full invoicing lifecycle: certificate management, WSAA authentication, WSFEv1 electronic invoicing, and Argentine fiscal rules — all in a standalone library with no framework or database dependencies.
 
 ```bash
-go get github.com/lukcba-developers/go-afip-kit@v0.3.2
+go get github.com/lukcba-developers/go-afip-kit@v0.4.0
 ```
 
 > Upgrading from v0.2.x? See [CHANGELOG.md](CHANGELOG.md) — v0.3.0 has breaking changes
@@ -425,6 +425,41 @@ func (r *RedisTokenStore) Delete(ctx context.Context, key string) error {
 store := &RedisTokenStore{client: redisClient}
 cached := wsaa.NewCachedClient(wsaaClient, store)
 ```
+
+### Several Replicas: Distributed Lock
+
+`CachedClient` coalesces concurrent logins only **within a process**. With
+several replicas sharing the store, two of them can miss the cache at the same
+time, both call LoginCms, and WSAA rejects the second with
+`coe.alreadyAuthenticated`. Add a `wsaa.Locker` so only one replica logs in and
+the others reuse its token:
+
+```go
+var unlockScript = redis.NewScript(
+    `if redis.call("GET", KEYS[1]) == ARGV[1] then return redis.call("DEL", KEYS[1]) end return 0`)
+
+type RedisLocker struct{ client *redis.Client }
+
+func (r *RedisLocker) TryLock(ctx context.Context, key, owner string, ttl time.Duration) (bool, error) {
+    return r.client.SetNX(ctx, key, owner, ttl).Result()
+}
+
+func (r *RedisLocker) Unlock(ctx context.Context, key, owner string) error {
+    return unlockScript.Run(ctx, r.client, []string{key}, owner).Err()
+}
+
+cached := wsaa.NewCachedClient(wsaaClient, store,
+    wsaa.WithLocker(&RedisLocker{client: redisClient}),
+    wsaa.WithLockTTL(60*time.Second), // optional; must exceed the LoginCms duration
+)
+```
+
+Lock keys are the token key plus `:lock` (e.g. `wsaa:prod:20123456789:wsfe:lock`).
+Waiting replicas poll the store until the token appears, the lock expires (the
+holder died), or their context ends. `wsaa.NewMemoryLocker()` is an in-process
+implementation for tests. Independently of the lock, if LoginCms answers
+`coe.alreadyAuthenticated` and the store already has a valid token (stored by
+another process), `Authenticate` returns that token.
 
 > **Protect the store.** Token and sign are bearer credentials valid for up to
 > 12 hours for that CUIT and service. Use a Redis with AUTH and TLS (or a

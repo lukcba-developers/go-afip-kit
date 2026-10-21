@@ -37,7 +37,7 @@ The module is `github.com/lukcba-developers/go-afip-kit`. Only external dependen
 
 1. **`soap/`** — Minimal SOAP 1.1 HTTP client. Handles envelope wrapping/unwrapping, fault detection. No WSDL — callers provide typed request/response structs via `xml` tags. All AFIP communication goes through `soap.Client.Call()`.
 
-2. **`wsaa/`** — WSAA authentication (LoginCms). Signs a TRA (Ticket de Requerimiento de Acceso) with PKCS#7/CMS, sends it to WSAA, gets back a `TokenAcceso` (token + sign + expiration). `CachedClient` wraps `Client` with a `TokenStore` interface for automatic token caching/renewal. `MemoryStore` is the built-in in-memory implementation; users implement `TokenStore` for Redis etc.
+2. **`wsaa/`** — WSAA authentication (LoginCms). Signs a TRA (Ticket de Requerimiento de Acceso) with PKCS#7/CMS, sends it to WSAA, gets back a `TokenAcceso` (token + sign + expiration). `CachedClient` wraps `Client` with a `TokenStore` interface for automatic token caching/renewal. `MemoryStore` is the built-in in-memory implementation; users implement `TokenStore` for Redis etc. Login coalescing is per process; with several replicas, `WithLocker` (a `Locker`, e.g. Redis `SET NX PX`) coalesces across processes.
 
 3. **`wsfev1/`** — WSFEv1 electronic invoicing client. `SolicitarCAE` emits comprobantes, `SolicitarCAEConReproceso` adds idempotent retry: on error 10016 it calls `Recuperar`, which queries `FECompConsultar` and returns the CAE only if the registered comprobante matches the one sent (otherwise `ErrComprobanteNoCoincide`). `Recuperar` is also the way to confirm a comprobante after an indeterminate failure (`afipkit.IsIndeterminate`). Also exposes parameter queries (tipos de comprobante, IVA, monedas, puntos de venta, cotizacion).
 
