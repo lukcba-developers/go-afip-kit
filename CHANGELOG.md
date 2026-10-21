@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.0
+
+- **afipkit:** `IsCUITNoRepresentado` (error 601): el `Auth.Cuit` enviado no
+  está entre los CUIT que representa el token. Bajo delegación significa que
+  la relación no existe o todavía no está en el TA. Renovar no sirve mientras
+  el TA siga vigente.
+- **docs:** facturación por delegación (una plataforma emite por cuenta de
+  contribuyentes que le delegaron `wsfe`). El `cuit` de `CachedClient`
+  identifica el TA, que es el CUIT del certificado. El de los métodos de
+  `wsfev1` es el CUIT representado.
+
 ## v0.5.2
 
 - **wsaa (corrección crítica):** `LoginCms` respondía `xml.bad` ("No se ha

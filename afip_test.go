@@ -171,6 +171,9 @@ func TestErrorCodeHelpers(t *testing.T) {
 	if !IsTokenRechazado(wrap(600)) || IsTokenRechazado(wrap(601)) {
 		t.Error("IsTokenRechazado must match 600 only")
 	}
+	if !IsCUITNoRepresentado(wrap(601)) || IsCUITNoRepresentado(wrap(600)) {
+		t.Error("IsCUITNoRepresentado must match 601 only")
+	}
 	if !IsPuntoVentaInvalido(wrap(10004)) || !IsPuntoVentaInvalido(wrap(10005)) || IsPuntoVentaInvalido(wrap(10016)) {
 		t.Error("IsPuntoVentaInvalido must match 10004/10005")
 	}

@@ -37,6 +37,17 @@ type authenticator interface {
 //
 // That coalescing is per process. With several replicas sharing the
 // TokenStore, configure WithLocker so only one replica calls LoginCms.
+//
+// The cuit taken by its methods identifies the TA in the cache: it is the CUIT
+// whose certificate logs in to WSAA. It is independent of the Auth.Cuit sent
+// to WSFE. Under delegation, where a platform invoices on behalf of taxpayers
+// who authorized its CUIT, pass the platform's CUIT here and the represented
+// taxpayer's CUIT to the wsfev1 calls:
+//
+//	err := cc.CallWithAuthRetry(ctx, cert, key, cuitPlataforma, "wsfe", prod, func(tok *wsaa.TokenAcceso) error {
+//	    res, err = fe.SolicitarCAEConReproceso(ctx, tok, cuitRepresentado, sol)
+//	    return err
+//	})
 type CachedClient struct {
 	client        authenticator
 	store         TokenStore

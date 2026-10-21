@@ -508,6 +508,25 @@ retries once. `Renew` returns a newer token if one is already stored, otherwise
 logs in and replaces the token only on success; a failed renewal leaves the
 stored token in place.
 
+### Invoicing on behalf of others (delegation)
+
+When a taxpayer authorizes your CUIT for `wsfe` in the Administrador de
+Relaciones, you log in to WSAA with **your** certificate and send **their**
+CUIT in each WSFEv1 call. The `cuit` of `CachedClient` identifies the TA (your
+CUIT); the `cuit` of the `wsfev1` methods is the one represented:
+
+```go
+err := cached.CallWithAuthRetry(ctx, cert, key, cuitPlataforma, "wsfe", production, func(tok *wsaa.TokenAcceso) error {
+    var err error
+    res, err = wsfe.SolicitarCAEConReproceso(ctx, tok, cuitRepresentado, sol)
+    return err
+})
+```
+
+One TA serves every represented CUIT. A delegation that does not exist, or
+was created after the TA was issued, fails with AFIP error 601
+(`afipkit.IsCUITNoRepresentado`).
+
 > **Protect the store.** Token and sign are bearer credentials valid for up to
 > 12 hours for that CUIT and service. Use a Redis with AUTH and TLS (or a
 > private network), or encrypt the value in your `TokenStore` (e.g. with
@@ -562,6 +581,7 @@ Helpers that take any error (no `errors.As` needed):
 |---|---|---|
 | `afipkit.IsIndeterminate` | No answer from AFIP | Pending; confirm later with `Recuperar` |
 | `afipkit.IsTokenRechazado` | 600, token/sign rejected | Retry with `CallWithAuthRetry` |
+| `afipkit.IsCUITNoRepresentado` | 601, Auth.Cuit not represented by the token | Delegation missing or not yet in the TA (wait for the TA to expire) |
 | `afipkit.IsPuntoVentaInvalido` | 10004/10005 | Create the PtoVta as **web services (RECE)** |
 | `afipkit.IsCondicionIVAReceptorInvalida` | 10242/10243/10246 | Fix `CondicionIVAReceptorId` (RG 5616) |
 | `wsaa.IsNotAuthorized` | `coe.notAuthorized` | Authorize the cert for `wsfe` (Administrador de Relaciones / WSASS) |

@@ -168,6 +168,14 @@ func hasAFIPCode(err error, codes ...int) bool {
 // new token may fix it — see wsaa.CachedClient.CallWithAuthRetry.
 func IsTokenRechazado(err error) bool { return hasAFIPCode(err, ErrCodeTokenRejected) }
 
+// IsCUITNoRepresentado reports AFIP error 601: the Auth.Cuit sent to the
+// business service is not among the CUITs the token represents. Under
+// delegation (a taxpayer authorizes the platform's CUIT for wsfe in the
+// Administrador de Relaciones) it means the delegation does not exist or is
+// not yet in the token. Renewing will not help while the TA is valid (WSAA
+// answers coe.alreadyAuthenticated): the TA must expire first.
+func IsCUITNoRepresentado(err error) bool { return hasAFIPCode(err, ErrCodeCUITNotInToken) }
+
 // IsPuntoVentaInvalido reports a punto de venta error (10004, 10005): the
 // PtoVta is out of range or is not registered as RECE (web services).
 func IsPuntoVentaInvalido(err error) bool {
