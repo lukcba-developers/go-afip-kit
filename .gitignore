@@ -20,9 +20,16 @@
 .DS_Store
 Thumbs.db
 
-# Test certificates (real ones, not test fixtures)
+# Certificados y claves: la librería no guarda credenciales, las provee cada app
 *.key
+*.crt
+*.cer
+*.pem
+*.csr
+*.p12
+*.pfx
 !testdata/
 
 # Environment
 .env
+.env.*

@@ -659,6 +659,14 @@ conds, _ := wsfe.CondicionesIVAReceptor(ctx, token, cuit, "C") // RG 5616
 - AFIP certificate (.crt) and private key (.key) for the CUIT to operate
 - Punto de venta configured in AFIP for electronic invoicing
 
+## Credentials and data
+
+The library holds no credentials or taxpayer data. Your application provides
+the certificate, private key, CUIT, punto de venta and `TokenStore`, and is
+responsible for storing them (e.g. the key encrypted with `KeyVault`, the
+material in a secret manager). Never commit certificates, keys or real CUITs
+to this repository; tests use generated certificates and fictitious CUITs.
+
 ## License
 
 MIT

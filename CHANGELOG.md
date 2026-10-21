@@ -2,8 +2,8 @@
 
 ## v0.5.0
 
-Mejoras a partir del feedback de surco-api (Tramo) y de una revisión de la
-especificación técnica de WSAA.
+Mejoras a partir del feedback de proyectos que usan la librería y de una
+revisión de la especificación técnica de WSAA.
 
 - **wsaa (corrección importante):** la especificación técnica de WSAA indica
   que el TRA se firma con SHA1+RSA. Seguimos firmando con SHA-256, pero si

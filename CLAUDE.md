@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Go library for Argentina's AFIP (ARCA) electronic invoicing web services. Covers WSAA authentication, WSFEv1 invoicing, certificate management, and fiscal rules. Pure library — no framework, no database, no CLI.
 
+The repository is public. The library is a pass-through: each consuming app provides its own certificate, key, CUIT, punto de venta and stores. Never commit certificates, keys, real CUITs, personal data or names of consuming projects; tests use generated certificates and fictitious CUITs.
+
 ## Commands
 
 ```bash

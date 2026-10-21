@@ -99,7 +99,7 @@ Todo lo demas es Go stdlib:
 ```
                     ┌─────────────────────────────────────────┐
                     │           Tu aplicacion                  │
-                    │  (Tramo, u otro proyecto Go)             │
+                    │  (cualquier proyecto Go)                 │
                     └──────────┬──────────────────────────────┘
                                │
           ┌────────────────────┼────────────────────┐
