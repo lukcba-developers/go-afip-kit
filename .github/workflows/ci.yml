@@ -15,18 +15,15 @@ permissions:
 
 jobs:
   test:
-    name: Test (Go ${{ matrix.go }})
+    name: Test
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # Mínimo declarado en go.mod y la última estable.
-        go: ["1.26.10", "stable"]
     steps:
       - uses: actions/checkout@v7
+      # Solo el mínimo declarado en go.mod: el repo es privado y cada job
+      # consume minutos de Actions de la cuenta.
       - uses: actions/setup-go@v7
         with:
-          go-version: ${{ matrix.go }}
+          go-version-file: go.mod
       - name: Download modules
         run: ./.github/scripts/retry.sh go mod download
       - run: go build ./...
