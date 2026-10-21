@@ -143,3 +143,46 @@ func TestAFIPError_IsNotFound(t *testing.T) {
 		t.Error("10016 is not 602")
 	}
 }
+
+func TestNormalizarCUIT(t *testing.T) {
+	ok := map[string]int64{
+		"20111111112":        20111111112,
+		"20-11111111-2":      20111111112,
+		" 20 11111111 2 ":    20111111112,
+		"CUIT 20-12345678-6": 20123456786,
+	}
+	for in, want := range ok {
+		got, err := NormalizarCUIT(in)
+		if err != nil || got != want {
+			t.Errorf("NormalizarCUIT(%q) = (%d, %v), want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"", "abc", "2011111111", "201111111123", "20-11111111-3"} {
+		if _, err := NormalizarCUIT(in); err == nil {
+			t.Errorf("NormalizarCUIT(%q): expected error", in)
+		}
+	}
+}
+
+func TestErrorCodeHelpers(t *testing.T) {
+	wrap := func(code int) error {
+		return fmt.Errorf("wsfev1: %w", NewAFIPError([]AFIPErrorDetail{{Code: code, Msg: "x"}}))
+	}
+	if !IsTokenRechazado(wrap(600)) || IsTokenRechazado(wrap(601)) {
+		t.Error("IsTokenRechazado must match 600 only")
+	}
+	if !IsPuntoVentaInvalido(wrap(10004)) || !IsPuntoVentaInvalido(wrap(10005)) || IsPuntoVentaInvalido(wrap(10016)) {
+		t.Error("IsPuntoVentaInvalido must match 10004/10005")
+	}
+	for _, c := range []int{10242, 10243, 10246} {
+		if !IsCondicionIVAReceptorInvalida(wrap(c)) {
+			t.Errorf("IsCondicionIVAReceptorInvalida(%d) = false", c)
+		}
+	}
+	if IsCondicionIVAReceptorInvalida(wrap(10247)) || IsCondicionIVAReceptorInvalida(errors.New("x")) || IsTokenRechazado(nil) {
+		t.Error("false positive")
+	}
+	if !NewAFIPError([]AFIPErrorDetail{{Code: 10004}}).IsInvalidPtoVta() {
+		t.Error("IsInvalidPtoVta must include 10004")
+	}
+}

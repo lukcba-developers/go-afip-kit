@@ -45,7 +45,7 @@ func generateTestCertAndKey(serialNumber string, notBefore, notAfter time.Time) 
 
 func TestValidate_Success(t *testing.T) {
 	certPEM, keyPEM, err := generateTestCertAndKey(
-		"CUIT 20123456789",
+		"CUIT 20123456786",
 		time.Now().Add(-1*time.Hour),
 		time.Now().Add(365*24*time.Hour),
 	)
@@ -53,7 +53,7 @@ func TestValidate_Success(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Validate(certPEM, keyPEM, "20123456789")
+	result, err := Validate(certPEM, keyPEM, "20123456786")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestValidate_Success(t *testing.T) {
 
 func TestValidate_CUITWithHyphens(t *testing.T) {
 	certPEM, keyPEM, err := generateTestCertAndKey(
-		"CUIT 20-12345678-9",
+		"CUIT 20-12345678-6",
 		time.Now().Add(-1*time.Hour),
 		time.Now().Add(365*24*time.Hour),
 	)
@@ -76,12 +76,12 @@ func TestValidate_CUITWithHyphens(t *testing.T) {
 	}
 
 	// Should match regardless of hyphens
-	_, err = Validate(certPEM, keyPEM, "20123456789")
+	_, err = Validate(certPEM, keyPEM, "20123456786")
 	if err != nil {
 		t.Fatalf("should match CUIT ignoring hyphens: %v", err)
 	}
 
-	_, err = Validate(certPEM, keyPEM, "20-12345678-9")
+	_, err = Validate(certPEM, keyPEM, "20-12345678-6")
 	if err != nil {
 		t.Fatalf("should match CUIT with hyphens: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestValidate_CUITWithHyphens(t *testing.T) {
 
 func TestValidate_CUITMismatch(t *testing.T) {
 	certPEM, keyPEM, err := generateTestCertAndKey(
-		"CUIT 20123456789",
+		"CUIT 20123456786",
 		time.Now().Add(-1*time.Hour),
 		time.Now().Add(365*24*time.Hour),
 	)
@@ -105,7 +105,7 @@ func TestValidate_CUITMismatch(t *testing.T) {
 
 func TestValidate_Expired(t *testing.T) {
 	certPEM, keyPEM, err := generateTestCertAndKey(
-		"CUIT 20123456789",
+		"CUIT 20123456786",
 		time.Now().Add(-2*365*24*time.Hour),
 		time.Now().Add(-1*24*time.Hour),
 	)
@@ -113,7 +113,7 @@ func TestValidate_Expired(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = Validate(certPEM, keyPEM, "20123456789")
+	_, err = Validate(certPEM, keyPEM, "20123456786")
 	if err == nil {
 		t.Fatal("expected error for expired cert")
 	}
@@ -121,7 +121,7 @@ func TestValidate_Expired(t *testing.T) {
 
 func TestValidate_NotYetValid(t *testing.T) {
 	certPEM, keyPEM, err := generateTestCertAndKey(
-		"CUIT 20123456789",
+		"CUIT 20123456786",
 		time.Now().Add(24*time.Hour),
 		time.Now().Add(365*24*time.Hour),
 	)
@@ -129,7 +129,7 @@ func TestValidate_NotYetValid(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = Validate(certPEM, keyPEM, "20123456789")
+	_, err = Validate(certPEM, keyPEM, "20123456786")
 	if err == nil {
 		t.Fatal("expected error for not-yet-valid cert")
 	}
@@ -137,7 +137,7 @@ func TestValidate_NotYetValid(t *testing.T) {
 
 func TestValidate_KeyMismatch(t *testing.T) {
 	certPEM, _, err := generateTestCertAndKey(
-		"CUIT 20123456789",
+		"CUIT 20123456786",
 		time.Now().Add(-1*time.Hour),
 		time.Now().Add(365*24*time.Hour),
 	)
@@ -152,7 +152,7 @@ func TestValidate_KeyMismatch(t *testing.T) {
 		Bytes: x509.MarshalPKCS1PrivateKey(otherKey),
 	})
 
-	_, err = Validate(certPEM, otherKeyPEM, "20123456789")
+	_, err = Validate(certPEM, otherKeyPEM, "20123456786")
 	if err == nil {
 		t.Fatal("expected error for key mismatch")
 	}
@@ -167,7 +167,7 @@ func TestValidate_InvalidPEM(t *testing.T) {
 
 func TestValidateCertOnly_Success(t *testing.T) {
 	certPEM, _, err := generateTestCertAndKey(
-		"CUIT 20123456789",
+		"CUIT 20123456786",
 		time.Now().Add(-1*time.Hour),
 		time.Now().Add(365*24*time.Hour),
 	)
@@ -175,17 +175,17 @@ func TestValidateCertOnly_Success(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := ValidateCertOnly(certPEM, "20123456789")
+	result, err := ValidateCertOnly(certPEM, "20123456786")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.SerialNumber != "CUIT 20123456789" {
+	if result.SerialNumber != "CUIT 20123456786" {
 		t.Errorf("unexpected serial: %s", result.SerialNumber)
 	}
 }
 
 func TestValidate_InvalidExpectedCUITFailsClosed(t *testing.T) {
-	certPEM, keyPEM, err := generateTestCertAndKey("CUIT 20123456789", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
+	certPEM, keyPEM, err := generateTestCertAndKey("CUIT 20123456786", time.Now().Add(-time.Hour), time.Now().Add(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,11 +205,11 @@ func TestValidate_InvalidExpectedCUITFailsClosed(t *testing.T) {
 
 func TestExtractCUIT(t *testing.T) {
 	tests := []struct{ input, expected string }{
-		{"20123456789", "20123456789"},
-		{"20-12345678-9", "20123456789"},
-		{"CUIT 20123456789", "20123456789"},
-		{"CUIT 20-12345678-9", "20123456789"},
-		{"SERIALNUMBER=CUIT 20123456789", "20123456789"},
+		{"20123456786", "20123456786"},
+		{"20-12345678-6", "20123456786"},
+		{"CUIT 20123456786", "20123456786"},
+		{"CUIT 20-12345678-6", "20123456786"},
+		{"SERIALNUMBER=CUIT 20123456786", "20123456786"},
 		{"abc", ""},                   // no valid CUIT
 		{"12345", ""},                 // too short
 	}
@@ -266,5 +266,46 @@ func TestParsePrivateKeyPEM_NonRSA(t *testing.T) {
 	_, err := ParsePrivateKeyPEM(keyPEM)
 	if err == nil {
 		t.Fatal("expected error for non-RSA key")
+	}
+}
+
+func TestCUITDelCertificado_IgnoresExpiry(t *testing.T) {
+	expired, _, err := generateTestCertAndKey("CUIT 20111111112", time.Now().Add(-48*time.Hour), time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cuit, err := CUITDelCertificado(expired)
+	if err != nil || cuit != 20111111112 {
+		t.Fatalf("got (%d, %v), want 20111111112", cuit, err)
+	}
+
+	// Validate still fails on expiry, but reports the CUIT in the result.
+	res, err := ValidateCertOnly(expired, "")
+	if err == nil {
+		t.Fatal("expected expiry error")
+	}
+	if res == nil || res.CUIT != 20111111112 {
+		t.Errorf("expected CUIT in the result even when expired, got %+v", res)
+	}
+
+	noCUIT, _, _ := generateTestCertAndKey("", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if _, err := CUITDelCertificado(noCUIT); err == nil {
+		t.Error("expected error for a certificate without CUIT")
+	}
+	if _, err := CUITDelCertificado([]byte("not pem")); err == nil {
+		t.Error("expected error for invalid PEM")
+	}
+}
+
+func TestValidate_ExpectedCUITWithBadCheckDigit(t *testing.T) {
+	certPEM, keyPEM, err := generateTestCertAndKey("CUIT 20111111112", time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Validate(certPEM, keyPEM, "20-11111111-2"); err != nil {
+		t.Fatalf("formatted valid CUIT should match: %v", err)
+	}
+	if _, err := Validate(certPEM, keyPEM, "20111111113"); err == nil {
+		t.Error("expected error for a CUIT with an invalid check digit")
 	}
 }

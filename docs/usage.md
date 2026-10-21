@@ -33,7 +33,7 @@ func main() {
     keyPEM, _ := os.ReadFile("mi_clave.key")
 
     // 2. Validar certificado
-    result, err := cert.Validate(certPEM, keyPEM, "20123456789")
+    result, err := cert.Validate(certPEM, keyPEM, "20123456786")
     if err != nil {
         log.Fatal(err)
     }
@@ -50,7 +50,7 @@ func main() {
     cachedAuth := wsaa.NewCachedClient(wsaaClient, wsaa.NewMemoryStore())
 
     token, err := cachedAuth.Authenticate(ctx, x509Cert, rsaKey,
-        20123456789, "wsfe", production)
+        20123456786, "wsfe", production)
     if err != nil {
         log.Fatal(err)
     }
@@ -69,7 +69,7 @@ func main() {
     }
 
     // 7. Obtener ultimo comprobante autorizado
-    cuit := int64(20123456789)
+    cuit := int64(20123456786)
     ptoVta := 1
     tipoCbte := afipkit.CbteFacturaB
 
@@ -181,7 +181,7 @@ iva, err := fiscal.CalcularIVA(100000.00, afipkit.IVA21)
 // iva == 21000.00
 
 // Validar CUIT
-err = afipkit.ValidarCUIT(20123456789)
+err = afipkit.ValidarCUIT(20123456786)
 
 // Validar fechas AFIP
 err = fiscal.ValidarFechaAFIP("20260318")
@@ -244,7 +244,7 @@ solicitud := &wsfev1.FECAESolicitarRequest{
                     Tipo:    afipkit.CbteFacturaA,
                     PtoVta:  1,
                     Nro:     42,
-                    Cuit:    20123456789,
+                    Cuit:    20123456786,
                     CbteFch: "20260318",
                 }},
             },

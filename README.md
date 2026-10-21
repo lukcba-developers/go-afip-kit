@@ -63,7 +63,7 @@ func main() {
     certPEM, _ := os.ReadFile("mi_certificado.crt")
     keyPEM, _ := os.ReadFile("mi_clave.key")
 
-    result, err := cert.Validate(certPEM, keyPEM, "20123456789")
+    result, err := cert.Validate(certPEM, keyPEM, "20123456786")
     if err != nil {
         log.Fatal(err)
     }
@@ -80,7 +80,7 @@ func main() {
     cachedAuth := wsaa.NewCachedClient(wsaaClient, wsaa.NewMemoryStore())
 
     token, err := cachedAuth.Authenticate(ctx, x509Cert, rsaKey,
-        20123456789, "wsfe", production)
+        20123456786, "wsfe", production)
     if err != nil {
         log.Fatal(err)
     }
@@ -97,7 +97,7 @@ func main() {
     }
 
     // 5. Get last authorized comprobante number
-    cuit := int64(20123456789)
+    cuit := int64(20123456786)
     ptoVta := 1
     tipoCbte := afipkit.CbteFacturaA
 
@@ -333,7 +333,7 @@ solicitud := &wsfev1.FECAESolicitarRequest{
                     Tipo:    afipkit.CbteFacturaA,
                     PtoVta:  1,
                     Nro:     42,
-                    Cuit:    20123456789,
+                    Cuit:    20123456786,
                     CbteFch: "20260318",
                 }},
             },
@@ -351,12 +351,12 @@ solicitud := &wsfev1.FECAESolicitarRequest{
 x509Cert, rsaKey, err := cert.ParseCertAndKey(certPEM, keyPEM)
 
 // Full validation: expiry, CUIT match, key pairing
-result, err := cert.Validate(certPEM, keyPEM, "20123456789")
+result, err := cert.Validate(certPEM, keyPEM, "20123456786")
 fmt.Printf("Expires: %s (%d days)\n", result.NotAfter, result.DaysUntilExpiry)
 fmt.Printf("Fingerprint: %s\n", result.Fingerprint)
 
 // Certificate-only validation (no private key needed)
-result, err := cert.ValidateCertOnly(certPEM, "20123456789")
+result, err := cert.ValidateCertOnly(certPEM, "20123456786")
 ```
 
 ### Encrypt Private Keys at Rest
@@ -454,7 +454,7 @@ cached := wsaa.NewCachedClient(wsaaClient, store,
 )
 ```
 
-Lock keys are the token key plus `:lock` (e.g. `wsaa:prod:20123456789:wsfe:lock`).
+Lock keys are the token key plus `:lock` (e.g. `wsaa:prod:20123456786:wsfe:lock`).
 Waiting replicas poll the store until the token appears, the lock expires (the
 holder died), or their context ends. `wsaa.NewMemoryLocker()` is an in-process
 implementation for tests. Independently of the lock, if LoginCms answers

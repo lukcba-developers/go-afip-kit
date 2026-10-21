@@ -6,7 +6,10 @@
 // Designed as a standalone library — no framework or database dependencies.
 package afipkit
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 // Tipos de comprobante
 const (
@@ -186,6 +189,30 @@ func IVAAlicuotaPorcentaje(id int) (float64, error) {
 		return 0, fmt.Errorf("afipkit: alicuota IVA desconocida: %d", id)
 	}
 	return v, nil
+}
+
+// NormalizarCUIT convierte un CUIT ingresado como texto ("20-12345678-9",
+// "20 12345678 9", "CUIT 20123456789") a su forma numérica: descarta todo lo
+// que no sea dígito, exige exactamente 11 dígitos y valida el dígito
+// verificador (ValidarCUIT).
+func NormalizarCUIT(s string) (int64, error) {
+	digits := make([]byte, 0, 11)
+	for i := 0; i < len(s); i++ {
+		if s[i] >= '0' && s[i] <= '9' {
+			digits = append(digits, s[i])
+		}
+	}
+	if len(digits) != 11 {
+		return 0, fmt.Errorf("afipkit: CUIT debe tener 11 digitos, %q tiene %d", s, len(digits))
+	}
+	cuit, err := strconv.ParseInt(string(digits), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("afipkit: CUIT invalido %q: %w", s, err)
+	}
+	if err := ValidarCUIT(cuit); err != nil {
+		return 0, err
+	}
+	return cuit, nil
 }
 
 // ValidarCUIT verifica que un CUIT sea valido (11 digitos, digito verificador correcto).

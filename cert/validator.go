@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,9 @@ type ValidationResult struct {
 	Subject string
 	// SerialNumber is the subject's serial number (contains CUIT).
 	SerialNumber string
+	// CUIT is the CUIT found in SerialNumber, or 0 if there is none. It is
+	// filled even when validation fails (e.g. an expired certificate).
+	CUIT int64
 	// NotBefore is when the certificate becomes valid.
 	NotBefore time.Time
 	// NotAfter is when the certificate expires.
@@ -75,6 +79,22 @@ func Validate(certPEM, keyPEM []byte, expectedCUIT string) (*ValidationResult, e
 	return result, nil
 }
 
+// CUITDelCertificado returns the CUIT the certificate was issued for (from its
+// subject serial number, "CUIT 20123456786"). It does NOT check expiry, so it
+// works on expired certificates — e.g. to warn that a stored certificate
+// belongs to another CUIT.
+func CUITDelCertificado(certPEM []byte) (int64, error) {
+	cert, err := ParseCertificatePEM(certPEM)
+	if err != nil {
+		return 0, &afipkit.ErrCertificate{Err: fmt.Errorf("PEM invalido: %w", err)}
+	}
+	cuit := cuitFromSerial(cert.Subject.SerialNumber)
+	if cuit == 0 {
+		return 0, &afipkit.ErrCertificate{Err: fmt.Errorf("el certificado no tiene CUIT en el serial number (%q)", cert.Subject.SerialNumber)}
+	}
+	return cuit, nil
+}
+
 // ValidateCertOnly validates just the certificate (without private key).
 // Useful for checking expiration and CUIT without requiring the key.
 func ValidateCertOnly(certPEM []byte, expectedCUIT string) (*ValidationResult, error) {
@@ -103,6 +123,7 @@ func buildResult(cert *x509.Certificate) *ValidationResult {
 	return &ValidationResult{
 		Subject:         cert.Subject.String(),
 		SerialNumber:    cert.Subject.SerialNumber,
+		CUIT:            cuitFromSerial(cert.Subject.SerialNumber),
 		NotBefore:       cert.NotBefore,
 		NotAfter:        cert.NotAfter,
 		DaysUntilExpiry: int(time.Until(cert.NotAfter).Hours() / 24),
@@ -126,21 +147,32 @@ func checkValidity(cert *x509.Certificate) error {
 }
 
 // matchCUIT verifies that the certificate's SerialNumber contains the expected CUIT.
-// Extracts the 11-digit CUIT from both values and performs exact comparison.
-// An expectedCUIT without 11 digits is an error, never a skipped check.
+// expectedCUIT is normalized with afipkit.NormalizarCUIT (11 digits, valid
+// check digit); an invalid one is an error, never a skipped check.
 func matchCUIT(cert *x509.Certificate, expectedCUIT string) error {
-	normalizedSerial := extractCUIT(cert.Subject.SerialNumber)
-	normalizedExpected := extractCUIT(expectedCUIT)
-
-	if normalizedExpected == "" {
-		return fmt.Errorf("CUIT esperado invalido: %q", expectedCUIT)
+	expected, err := afipkit.NormalizarCUIT(expectedCUIT)
+	if err != nil {
+		return fmt.Errorf("CUIT esperado invalido: %w", err)
 	}
 
-	if normalizedSerial != normalizedExpected {
+	if cuitFromSerial(cert.Subject.SerialNumber) != expected {
 		return fmt.Errorf("CUIT del certificado (%s) no coincide con el esperado (%s)",
 			cert.Subject.SerialNumber, expectedCUIT)
 	}
 	return nil
+}
+
+// cuitFromSerial returns the CUIT in a certificate serial number, or 0.
+func cuitFromSerial(serial string) int64 {
+	s := extractCUIT(serial)
+	if s == "" {
+		return 0
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 // extractCUIT extracts the 11-digit CUIT from a string, stripping hyphens,

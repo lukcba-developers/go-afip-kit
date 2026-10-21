@@ -58,7 +58,8 @@ const (
 	// fuera de rango: hay que verificarlo con FECompConsultar (wsfev1.Recuperar),
 	// nunca asumirlo.
 	ErrCodeAlreadyRegistered = 10016
-	ErrCodeInvalidPtoVta     = 10005 // Invalid punto de venta
+	ErrCodeInvalidPtoVta     = 10005 // Punto de venta no dado de alta o no es del tipo RECE
+	ErrCodePtoVtaOutOfRange  = 10004 // PtoVta fuera de 1..99998
 	ErrCodeUnauthorized      = 10000 // CUIT not authorized
 	ErrCodeInvalidNumber     = 10013 // Invalid comprobante number
 	ErrCodeAmountMismatch    = 10048 // Amounts don't add up
@@ -69,6 +70,15 @@ const (
 	ErrCodeInternalDB  = 501 // Error interno de base de datos
 	ErrCodeInternalTx  = 502 // Error interno de base de datos - transacción activa
 	ErrCodeNotFound    = 602 // No existen datos en nuestros registros (FECompConsultar)
+
+	// Errores de autenticación del token WSAA en los servicios de negocio.
+	ErrCodeTokenRejected  = 600 // No se corresponden token y firma / token vencido
+	ErrCodeCUITNotInToken = 601 // CUIT representada no incluida en el token
+
+	// Condición frente al IVA del receptor (RG 5616).
+	ErrCodeCondIVAReceptorInvalid  = 10242 // valor no permitido
+	ErrCodeCondIVAReceptorClase    = 10243 // no válido para la clase de comprobante
+	ErrCodeCondIVAReceptorRequired = 10246 // obligatorio (RG 5616)
 )
 
 // permanentErrors are AFIP error codes that indicate a permanent failure.
@@ -85,8 +95,11 @@ var permanentErrors = map[int]bool{
 // comprobante exists: confirm it with FECompConsultar (wsfev1.Recuperar).
 func (e *AFIPError) IsAlreadyRegistered() bool { return e.HasCode(ErrCodeAlreadyRegistered) }
 
-// IsInvalidPtoVta returns true for punto de venta errors.
-func (e *AFIPError) IsInvalidPtoVta() bool { return e.HasCode(ErrCodeInvalidPtoVta) }
+// IsInvalidPtoVta returns true for punto de venta errors: not registered as
+// RECE (10005) or out of range (10004).
+func (e *AFIPError) IsInvalidPtoVta() bool {
+	return e.HasCode(ErrCodeInvalidPtoVta) || e.HasCode(ErrCodePtoVtaOutOfRange)
+}
 
 // IsUnauthorized returns true when the CUIT is not authorized for the service.
 func (e *AFIPError) IsUnauthorized() bool { return e.HasCode(ErrCodeUnauthorized) }
@@ -136,6 +149,38 @@ func IsAFIPError(err error) (*AFIPError, bool) {
 	return nil, false
 }
 
+// hasAFIPCode reports whether err is (or wraps) an *AFIPError with any of codes.
+func hasAFIPCode(err error, codes ...int) bool {
+	afipErr, ok := IsAFIPError(err)
+	if !ok {
+		return false
+	}
+	for _, c := range codes {
+		if afipErr.HasCode(c) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsTokenRechazado reports AFIP error 600: the WSAA token/sign was not
+// accepted (expired, revoked, or issued for another certificate). Getting a
+// new token may fix it — see wsaa.CachedClient.CallWithAuthRetry.
+func IsTokenRechazado(err error) bool { return hasAFIPCode(err, ErrCodeTokenRejected) }
+
+// IsPuntoVentaInvalido reports a punto de venta error (10004, 10005): the
+// PtoVta is out of range or is not registered as RECE (web services).
+func IsPuntoVentaInvalido(err error) bool {
+	return hasAFIPCode(err, ErrCodeInvalidPtoVta, ErrCodePtoVtaOutOfRange)
+}
+
+// IsCondicionIVAReceptorInvalida reports a CondicionIVAReceptorId error
+// (10242 invalid value, 10243 not valid for the comprobante class, 10246
+// missing). Validate locally with fiscal.ValidarCondicionIVAReceptor.
+func IsCondicionIVAReceptorInvalida(err error) bool {
+	return hasAFIPCode(err, ErrCodeCondIVAReceptorInvalid, ErrCodeCondIVAReceptorClase, ErrCodeCondIVAReceptorRequired)
+}
+
 // ErrIncompleteResponse indicates AFIP answered but the response lacks the data
 // needed to know the outcome (e.g. FECAESolicitar without FeDetResp, or
 // Resultado "A" without CAE).
@@ -145,6 +190,11 @@ var ErrIncompleteResponse = errors.New("afip: respuesta incompleta")
 // wsfev1.SolicitarCAEConReproceso, leaves the outcome UNKNOWN: AFIP may or may
 // not have authorized the comprobante. The caller must not mark it as rejected;
 // it should keep it pending and confirm it later with wsfev1.Recuperar.
+//
+// The same classification applies to every wsfev1 call (UltimoAutorizado,
+// Recuperar, ConsultarComprobante, FEParamGet*): true means "no answer from
+// AFIP, try again later"; false with an *AFIPError means AFIP answered and
+// rejected the query (for Recuperar, 602 is already turned into found=false).
 //
 // Indeterminate (true):
 //   - *ErrSOAP: network failures, timeouts, HTTP errors, SOAP faults and
