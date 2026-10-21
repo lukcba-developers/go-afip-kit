@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	afipkit "github.com/lukcba-developers/go-afip-kit"
 )
 
 // DefaultRenewalMargin is how early to renew a token before it expires.
@@ -135,22 +137,91 @@ func (cc *CachedClient) Authenticate(ctx context.Context, cert *x509.Certificate
 	if token, err := cc.cached(ctx, k); err != nil || token != nil {
 		return token, err
 	}
+	return cc.obtain(ctx, cert, key, k, service, production, nil)
+}
 
-	// Slow path: serialize per key so only one goroutine hits WSAA.
+// Renew obtains a new token after a business service rejected `rejected`
+// (AFIP error 600, see afipkit.IsTokenRechazado). It never deletes the stored
+// token:
+//   - if the store already holds a different valid token (another goroutine or
+//     replica renewed first), that one is returned;
+//   - otherwise it calls LoginCms and, only on success, replaces the stored
+//     token.
+//
+// If WSAA still considers the rejected TA valid it answers
+// coe.alreadyAuthenticated: the error is returned and the stored token is left
+// in place, so a transient 600 does not leave the CUIT without a token. With
+// several replicas, configure WithLocker so the check and the renewal are
+// atomic across them.
+func (cc *CachedClient) Renew(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, cuit int64, service string, production bool, rejected *TokenAcceso) (*TokenAcceso, error) {
+	return cc.obtain(ctx, cert, key, cacheKey(cuit, service, production), service, production, rejected)
+}
+
+// CallWithAuthRetry runs call with a valid token. If call fails with AFIP
+// error 600 (token rejected), it gets a fresh token with Renew and runs call
+// exactly once more. Any other result of call is returned as is.
+//
+//	err := cc.CallWithAuthRetry(ctx, cert, key, cuit, "wsfe", prod, func(tok *wsaa.TokenAcceso) error {
+//	    var err error
+//	    res, err = wsfe.SolicitarCAEConReproceso(ctx, tok, cuit, sol)
+//	    return err
+//	})
+//
+// A 600 on FECAESolicitar comes in the header Errors: the comprobante was not
+// processed, so the retry is safe.
+func (cc *CachedClient) CallWithAuthRetry(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, cuit int64, service string, production bool, call func(*TokenAcceso) error) error {
+	token, err := cc.Authenticate(ctx, cert, key, cuit, service, production)
+	if err != nil {
+		return err
+	}
+	err = call(token)
+	if !afipkit.IsTokenRechazado(err) {
+		return err
+	}
+	fresh, rErr := cc.Renew(ctx, cert, key, cuit, service, production, token)
+	if rErr != nil {
+		return fmt.Errorf("%w (renovar token: %w)", err, rErr)
+	}
+	return call(fresh)
+}
+
+// obtain returns a usable token for key k, calling LoginCms only when needed.
+// A stored token is usable when it is valid and is not `rejected`.
+func (cc *CachedClient) obtain(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool, rejected *TokenAcceso) (*TokenAcceso, error) {
+	usable := func() (*TokenAcceso, error) {
+		token, err := cc.cached(ctx, k)
+		if err != nil || token == nil {
+			return nil, err
+		}
+		if rejected != nil && token.Token == rejected.Token {
+			return nil, nil
+		}
+		return token, nil
+	}
+
+	// Serialize per key so only one goroutine hits WSAA.
 	lock := cc.keyLock(k)
 	lock.Lock()
 	defer lock.Unlock()
 
-	// Re-check the store: another goroutine may have refreshed the token
-	// while we waited for the lock.
-	if token, err := cc.cached(ctx, k); err != nil || token != nil {
+	// Another goroutine may have stored a token while we waited for the lock.
+	if token, err := usable(); err != nil || token != nil {
 		return token, err
 	}
 
 	if cc.locker != nil {
-		return cc.loginLocked(ctx, cert, key, k, service, production)
+		release, token, err := cc.lockDistributed(ctx, k, usable)
+		if err != nil || token != nil {
+			return token, err
+		}
+		defer release()
+
+		// The previous holder may have stored a token right before releasing.
+		if token, err := usable(); err != nil || token != nil {
+			return token, err
+		}
 	}
-	return cc.login(ctx, cert, key, k, service, production)
+	return cc.login(ctx, cert, key, k, service, production, usable)
 }
 
 // cached returns the stored token if it is still valid, or nil.
@@ -165,58 +236,53 @@ func (cc *CachedClient) cached(ctx context.Context, k string) (*TokenAcceso, err
 	return nil, nil
 }
 
-// loginLocked takes the distributed lock before calling LoginCms. While another
-// process holds it, it polls the store for the token that process will save.
-func (cc *CachedClient) loginLocked(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool) (*TokenAcceso, error) {
+// lockDistributed takes the distributed lock for k. While another process
+// holds it, it polls usable(); if that yields a token (the holder stored it),
+// the token is returned and no lock is taken.
+func (cc *CachedClient) lockDistributed(ctx context.Context, k string, usable func() (*TokenAcceso, error)) (release func(), token *TokenAcceso, err error) {
 	lockKey := k + ":lock"
 	owner, err := newLockOwner()
 	if err != nil {
-		return nil, fmt.Errorf("wsaa: lock owner: %w", err)
+		return nil, nil, fmt.Errorf("wsaa: lock owner: %w", err)
 	}
 
 	for {
 		acquired, err := cc.locker.TryLock(ctx, lockKey, owner, cc.lockTTL)
 		if err != nil {
-			return nil, fmt.Errorf("wsaa: distributed lock %s: %w", lockKey, err)
+			return nil, nil, fmt.Errorf("wsaa: distributed lock %s: %w", lockKey, err)
 		}
 		if acquired {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("wsaa: waiting for distributed lock %s: %w", lockKey, ctx.Err())
+			return nil, nil, fmt.Errorf("wsaa: waiting for distributed lock %s: %w", lockKey, ctx.Err())
 		case <-time.After(cc.lockPoll):
 		}
-		if token, err := cc.cached(ctx, k); err != nil || token != nil {
-			return token, err
+		if token, err := usable(); err != nil || token != nil {
+			return nil, token, err
 		}
 	}
 
-	defer func() {
+	return func() {
 		// Release even if ctx was canceled; the TTL covers a failed release.
 		uctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if err := cc.locker.Unlock(uctx, lockKey, owner); err != nil && cc.logger != nil {
 			cc.logger.Warn("wsaa: distributed unlock failed", "key", lockKey, "error", err)
 		}
-	}()
-
-	// The previous holder may have stored a token right before releasing.
-	if token, err := cc.cached(ctx, k); err != nil || token != nil {
-		return token, err
-	}
-	return cc.login(ctx, cert, key, k, service, production)
+	}, nil, nil
 }
 
 // login calls LoginCms and stores the token.
-func (cc *CachedClient) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool) (*TokenAcceso, error) {
+func (cc *CachedClient) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool, usable func() (*TokenAcceso, error)) (*TokenAcceso, error) {
 	token, err := cc.client.Authenticate(ctx, cert, key, service, production)
 	if err != nil {
 		// Another process (without the lock, e.g. an older deploy) may have
 		// just logged in and stored its token: reuse it if so.
 		if IsAlreadyAuthenticated(err) {
-			if cachedToken, cErr := cc.cached(ctx, k); cErr == nil && cachedToken != nil {
-				return cachedToken, nil
+			if stored, sErr := usable(); sErr == nil && stored != nil {
+				return stored, nil
 			}
 		}
 		return nil, err
