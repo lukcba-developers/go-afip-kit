@@ -70,6 +70,13 @@ type fakeWSAA struct {
 
 func (f *fakeWSAA) handler(t *testing.T) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// Como Axis: sin header SOAPAction, LoginCms responde Client.NoSOAPAction.
+		if len(r.Header.Values("SOAPAction")) == 0 {
+			w.Header().Set("Content-Type", "text/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(faultResponse("Client.NoSOAPAction", "no SOAPAction header!")))
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		m := in0Re.FindSubmatch(body)
 		if m == nil {

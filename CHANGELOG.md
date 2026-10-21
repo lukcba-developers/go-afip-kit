@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.1
+
+- **wsaa/soap (corrección crítica):** `LoginCms` fallaba siempre contra WSAA
+  real con el fault `Client.NoSOAPAction` ("no SOAPAction header!").
+  `soap.Client` omitía el header `SOAPAction` cuando la acción venía vacía,
+  que es el caso de LoginCms, y Axis lo exige. Ahora se envía siempre; sin
+  acción va como `SOAPAction: ""` (SOAP 1.1). WSFEv1 no cambia: sigue
+  mandando la acción de cada operación.
+- Tests: el WSAA falso de los tests rechaza los requests sin `SOAPAction`,
+  igual que Axis.
+
 ## v0.5.0
 
 Mejoras a partir del feedback de proyectos que usan la librería y de una

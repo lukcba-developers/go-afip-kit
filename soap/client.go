@@ -128,7 +128,8 @@ type faultEnvelope struct {
 // via HTTP POST, and unmarshals the response body into the provided struct.
 //
 // It detects and returns SOAP faults as *Fault errors.
-// The soapAction is sent as the SOAPAction HTTP header.
+// The soapAction is sent as the SOAPAction HTTP header; an empty soapAction
+// is sent as `""`, since SOAP 1.1 requires the header to be present.
 func (c *Client) Call(ctx context.Context, url, soapAction string, request, response any) error {
 	// 1. Marshal request body
 	bodyXML, err := xml.Marshal(request)
@@ -195,9 +196,13 @@ func (c *Client) post(ctx context.Context, url, soapAction string, body []byte) 
 			return nil, fmt.Errorf("soap: create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "text/xml; charset=utf-8")
-		if soapAction != "" {
-			req.Header.Set("SOAPAction", soapAction)
+		// SOAP 1.1 exige el header SOAPAction siempre. Sin acción va como
+		// `""`: Axis (WSAA LoginCms) rechaza el request si falta el header
+		// con el fault Client.NoSOAPAction.
+		if soapAction == "" {
+			soapAction = `""`
 		}
+		req.Header.Set("SOAPAction", soapAction)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {

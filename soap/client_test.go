@@ -154,3 +154,27 @@ func TestCall_SOAPFaultInHTTPError(t *testing.T) {
 		t.Fatalf("expected *Fault from HTTP 500 with SOAP fault body, got %T", err)
 	}
 }
+
+// TestCall_EmptySOAPActionSendsHeader verifies an empty action is still sent
+// as the header `SOAPAction: ""` (SOAP 1.1): Axis rejects a request without
+// it with Client.NoSOAPAction.
+func TestCall_EmptySOAPActionSendsHeader(t *testing.T) {
+	var got []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Values("SOAPAction")
+		w.Header().Set("Content-Type", "text/xml")
+		_, _ = w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?>
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Body><TestResponse><Result>OK</Result></TestResponse></soap:Body>
+</soap:Envelope>`))
+	}))
+	defer server.Close()
+
+	var resp testResponse
+	if err := NewClient().Call(context.Background(), server.URL, "", &testRequest{Value: "x"}, &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != `""` {
+		t.Fatalf(`SOAPAction = %q, want [""]`, got)
+	}
+}
