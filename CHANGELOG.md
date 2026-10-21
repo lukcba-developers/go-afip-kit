@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.5.0
+
+Mejoras a partir del feedback de surco-api (Tramo) y de una revisión de la
+especificación técnica de WSAA.
+
+- **wsaa (corrección importante):** la especificación técnica de WSAA indica
+  que el TRA se firma con SHA1+RSA. Seguimos firmando con SHA-256, pero si
+  LoginCms responde `cms.sign.invalid` el `Client` reintenta una vez con
+  SHA-1 y lo recuerda. `Client.SignatureDigest()` informa cuál usa. Así el
+  login funciona sin importar qué acepte WSAA.
+- **wsaa:** `CachedClient.Renew` y `CachedClient.CallWithAuthRetry` para el
+  error 600 (token rechazado). Renuevan el token sin borrar el guardado y
+  reintentan una sola vez. Con `WithLocker` son atómicos entre réplicas.
+- **wsaa:** clasificación de faults. `FaultCode(err)`, las constantes
+  `Fault*` de la especificación, e `IsNotAuthorized`, `IsCertUntrusted`,
+  `IsCertExpired`, `IsSignatureInvalid`, `IsClockError` e `IsUnavailable`.
+- **afipkit:** `NormalizarCUIT(s) (int64, error)`, e `IsTokenRechazado` (600),
+  `IsPuntoVentaInvalido` (10004/10005) e `IsCondicionIVAReceptorInvalida`
+  (10242/10243/10246), que reciben un error. Se agregan las constantes
+  `ErrCodeTokenRejected`, `ErrCodeCUITNotInToken`, `ErrCodePtoVtaOutOfRange` y
+  `ErrCodeCondIVAReceptor*`. `AFIPError.IsInvalidPtoVta` incluye el 10004.
+- **cert:** `CUITDelCertificado(certPEM)` devuelve el CUIT sin mirar el
+  vencimiento, y `ValidationResult.CUIT` queda cargado aunque la validación
+  falle.
+- **Comportamiento:** `cert.Validate` / `ValidateCertOnly` normalizan el CUIT
+  esperado con `NormalizarCUIT`. Un CUIT esperado con el dígito verificador
+  inválido ahora da error.
+- **Docs:** qué persistir para `Recuperar` (`FECAEDetRequest` como JSON, con
+  un test que fija el formato) y que `IsIndeterminate` vale para todas las
+  consultas de wsfev1.
+
+Sin cambios en firmas existentes.
+
 ## v0.4.0
 
 - **wsaa:** lock distribuido opcional para coalescer los LoginCms entre

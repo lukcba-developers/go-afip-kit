@@ -5,7 +5,7 @@ Go client library for Argentina's **AFIP (ARCA)** electronic invoicing web servi
 Covers the full invoicing lifecycle: certificate management, WSAA authentication, WSFEv1 electronic invoicing, and Argentine fiscal rules — all in a standalone library with no framework or database dependencies.
 
 ```bash
-go get github.com/lukcba-developers/go-afip-kit@v0.4.0
+go get github.com/lukcba-developers/go-afip-kit@v0.5.0
 ```
 
 > Upgrading from v0.2.x? See [CHANGELOG.md](CHANGELOG.md) — v0.3.0 has breaking changes
@@ -235,6 +235,26 @@ default:
 `CbteFch` (when it was sent). `UltimoAutorizado` returns the last number
 authorized for a punto de venta + tipo.
 
+**What to persist before calling AFIP**, to resolve a pending comprobante
+later: environment, CUIT, `PtoVta`, `CbteTipo`, the number, and the whole
+`FECAEDetRequest` as JSON. `json.Marshal(det)` is stable: the field names are
+the Go field names, dates and amounts are already ARCA strings (`YYYYMMDD`,
+`"1234.56"`), and a test pins the format. Store it before the call and update
+it if you re-emit with a new `CbteFch`.
+
+```go
+raw, _ := json.Marshal(sol.FeCAEReq.FeDetReq[0])   // save with state "enviando"
+// ... later, to reconcile:
+var det wsfev1.FECAEDetRequest
+_ = json.Unmarshal(raw, &det)
+res, found, err := wsfe.Recuperar(ctx, token, cuit, ptoVta, tipo, nro, &det)
+```
+
+`IsIndeterminate` applies to every wsfev1 call, not only `SolicitarCAE`: for
+`UltimoAutorizado`, `Recuperar` or the parameter queries, `true` means "no answer
+from AFIP, retry later" and an `*AFIPError` means AFIP answered and rejected the
+query.
+
 > AFIP error **10016** means "the number or date is not the next one to
 > authorize" — not "already registered". It shows up when a previous attempt
 > was authorized, but also with a skipped number or an out-of-range date.
@@ -357,6 +377,12 @@ fmt.Printf("Fingerprint: %s\n", result.Fingerprint)
 
 // Certificate-only validation (no private key needed)
 result, err := cert.ValidateCertOnly(certPEM, "20123456786")
+
+// CUIT of a certificate, even if expired (e.g. "this cert belongs to another CUIT")
+certCUIT, err := cert.CUITDelCertificado(certPEM)
+
+// Normalize user input: strips non-digits, requires 11 digits and a valid check digit
+cuit, err := afipkit.NormalizarCUIT("20-12345678-6") // 20123456786
 ```
 
 ### Encrypt Private Keys at Rest
@@ -461,6 +487,27 @@ implementation for tests. Independently of the lock, if LoginCms answers
 `coe.alreadyAuthenticated` and the store already has a valid token (stored by
 another process), `Authenticate` returns that token.
 
+### Token Rejected by the Service (error 600)
+
+When WSFEv1 answers 600 ("no se corresponden token y firma"), get a new token
+**without deleting the stored one**: blindly invalidating it can wipe the token
+another replica just renewed, and the next login fails with
+`coe.alreadyAuthenticated`. `CallWithAuthRetry` does it for you:
+
+```go
+var res *wsfev1.CAEResult
+err := cached.CallWithAuthRetry(ctx, cert, key, cuit, "wsfe", production, func(tok *wsaa.TokenAcceso) error {
+    var err error
+    res, err = wsfe.SolicitarCAEConReproceso(ctx, tok, cuit, sol)
+    return err
+})
+```
+
+On `afipkit.IsTokenRechazado(err)` it calls `cached.Renew(..., rejected)` and
+retries once. `Renew` returns a newer token if one is already stored, otherwise
+logs in and replaces the token only on success; a failed renewal leaves the
+stored token in place.
+
 > **Protect the store.** Token and sign are bearer credentials valid for up to
 > 12 hours for that CUIT and service. Use a Redis with AUTH and TLS (or a
 > private network), or encrypt the value in your `TokenStore` (e.g. with
@@ -508,6 +555,29 @@ if err != nil {
     }
 }
 ```
+
+Helpers that take any error (no `errors.As` needed):
+
+| Helper | Meaning | What to tell the user |
+|---|---|---|
+| `afipkit.IsIndeterminate` | No answer from AFIP | Pending; confirm later with `Recuperar` |
+| `afipkit.IsTokenRechazado` | 600, token/sign rejected | Retry with `CallWithAuthRetry` |
+| `afipkit.IsPuntoVentaInvalido` | 10004/10005 | Create the PtoVta as **web services (RECE)** |
+| `afipkit.IsCondicionIVAReceptorInvalida` | 10242/10243/10246 | Fix `CondicionIVAReceptorId` (RG 5616) |
+| `wsaa.IsNotAuthorized` | `coe.notAuthorized` | Authorize the cert for `wsfe` (Administrador de Relaciones / WSASS) |
+| `wsaa.IsCertUntrusted` | `cms.cert.untrusted` | Homologación cert in production or vice versa |
+| `wsaa.IsCertExpired` | `cms.cert.expired` | Renew the certificate |
+| `wsaa.IsClockError` | `xml.generationTime.invalid`, `xml.expirationTime.expired` | Sync the server clock (NTP) |
+| `wsaa.IsAlreadyAuthenticated` | `coe.alreadyAuthenticated` | A TA is still valid: use a persistent store / `WithLocker` |
+| `wsaa.IsUnavailable` | `wsaa.*`, `wsn.unavailable` | Transient: retry after 60 s |
+
+`wsaa.FaultCode(err)` returns the raw WSAA fault code (e.g. `"cms.sign.invalid"`)
+and the `wsaa.Fault*` constants list them all.
+
+> **TRA signature digest.** The TRA is signed with SHA-256. The WSAA spec
+> still documents SHA1+RSA, so if WSAA answers `cms.sign.invalid` the client
+> retries once with SHA-1 and keeps using it. `wsaaClient.SignatureDigest()`
+> tells which one is in use.
 
 ## Constants Reference
 
