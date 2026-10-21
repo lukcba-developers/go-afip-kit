@@ -33,7 +33,7 @@ func TestSignCMS_UsesSHA256(t *testing.T) {
 	}
 
 	data := []byte("<loginTicketRequest/>")
-	cms, err := signCMS(data, cert, key)
+	cms, err := signCMS(data, cert, key, pkcs7.OIDDigestAlgorithmSHA256)
 	if err != nil {
 		t.Fatalf("signCMS: %v", err)
 	}

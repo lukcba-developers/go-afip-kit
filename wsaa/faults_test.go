@@ -37,3 +37,41 @@ func TestIsAlreadyAuthenticated(t *testing.T) {
 		t.Error("false positive on nil")
 	}
 }
+
+func TestFaultHelpers(t *testing.T) {
+	wrap := func(code string) error {
+		return &afipkit.ErrWSAAAuth{Err: fmt.Errorf("LoginCms: %w", &soap.Fault{Code: "ns1:" + code, String: "x"})}
+	}
+	tests := []struct {
+		code string
+		fn   func(error) bool
+	}{
+		{FaultNotAuthorized, IsNotAuthorized},
+		{FaultCertUntrusted, IsCertUntrusted},
+		{FaultCertExpired, IsCertExpired},
+		{FaultSignInvalid, IsSignatureInvalid},
+		{FaultGenerationTimeInvalid, IsClockError},
+		{FaultExpirationTimeExpired, IsClockError},
+		{FaultWSAAUnavailable, IsUnavailable},
+		{FaultWSAAInternalError, IsUnavailable},
+		{FaultServiceUnavailable, IsUnavailable},
+	}
+	for _, tt := range tests {
+		err := wrap(tt.code)
+		if got := FaultCode(err); got != tt.code {
+			t.Errorf("FaultCode = %q, want %q", got, tt.code)
+		}
+		if !tt.fn(err) {
+			t.Errorf("helper for %s returned false", tt.code)
+		}
+		if tt.fn(wrap(FaultCMSBad)) {
+			t.Errorf("helper for %s matched cms.bad", tt.code)
+		}
+	}
+	if FaultCode(errors.New("x")) != "" || FaultCode(nil) != "" {
+		t.Error("FaultCode of a non-fault must be empty")
+	}
+	if got := FaultCode(&soap.Fault{Code: "coe.notAuthorized"}); got != FaultNotAuthorized {
+		t.Errorf("code without namespace: %q", got)
+	}
+}

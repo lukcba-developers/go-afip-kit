@@ -7,12 +7,15 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/asn1"
 	"encoding/xml"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	afipkit "github.com/lukcba-developers/go-afip-kit"
 	"github.com/lukcba-developers/go-afip-kit/soap"
+	"go.mozilla.org/pkcs7"
 )
 
 const (
@@ -23,8 +26,15 @@ const (
 )
 
 // Client communicates with WSAA to obtain access tokens.
+//
+// The TRA is signed with SHA-256. The WSAA technical spec still documents
+// SHA1+RSA, so if LoginCms answers cms.sign.invalid ("firma inválida o
+// algoritmo no soportado") the login is retried once with SHA-1 and the client
+// keeps using SHA-1 from then on. SignatureDigest reports which one is in use.
 type Client struct {
-	soap *soap.Client
+	soap     *soap.Client
+	baseURL  string      // overrides the WSAA URL; only set by tests
+	sha1Only atomic.Bool // WSAA rejected SHA-256
 }
 
 // NewClient creates a WSAA client.
@@ -40,6 +50,27 @@ func NewClient(opts ...soap.Option) *Client {
 // The service parameter identifies the target web service (e.g. "wsfe" for WSFEv1).
 // Set production=true to use the production WSAA endpoint.
 func (c *Client) Authenticate(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, service string, production bool) (*TokenAcceso, error) {
+	if !c.sha1Only.Load() {
+		token, err := c.login(ctx, cert, key, service, production, pkcs7.OIDDigestAlgorithmSHA256)
+		if !IsSignatureInvalid(err) {
+			return token, err
+		}
+		c.sha1Only.Store(true)
+	}
+	return c.login(ctx, cert, key, service, production, pkcs7.OIDDigestAlgorithmSHA1)
+}
+
+// SignatureDigest returns the digest used to sign the TRA: "SHA-256", or
+// "SHA-1" once WSAA rejected SHA-256 with cms.sign.invalid.
+func (c *Client) SignatureDigest() string {
+	if c.sha1Only.Load() {
+		return "SHA-1"
+	}
+	return "SHA-256"
+}
+
+// login signs a fresh TRA with the given digest and calls LoginCms.
+func (c *Client) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, service string, production bool, digest asn1.ObjectIdentifier) (*TokenAcceso, error) {
 	// 1. Generate TRA (Ticket de Requerimiento de Acceso)
 	now := time.Now()
 	tra := loginTicketRequest{
@@ -61,7 +92,7 @@ func (c *Client) Authenticate(ctx context.Context, cert *x509.Certificate, key *
 	traXML = append([]byte(xml.Header), traXML...)
 
 	// 2. Sign TRA with CMS/PKCS#7
-	cms, err := signCMS(traXML, cert, key)
+	cms, err := signCMS(traXML, cert, key, digest)
 	if err != nil {
 		return nil, &afipkit.ErrWSAAAuth{Err: fmt.Errorf("sign CMS: %w", err)}
 	}
@@ -71,6 +102,9 @@ func (c *Client) Authenticate(ctx context.Context, cert *x509.Certificate, key *
 	url := homoURL
 	if production {
 		url = prodURL
+	}
+	if c.baseURL != "" {
+		url = c.baseURL
 	}
 
 	req := loginCmsRequest{
