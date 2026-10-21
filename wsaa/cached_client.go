@@ -299,6 +299,12 @@ func (cc *CachedClient) login(ctx context.Context, cert *x509.Certificate, key *
 // Invalidate removes the cached token for the given environment, forcing
 // re-authentication on the next call. The token of the other environment is
 // left untouched.
+//
+// Do NOT use it to react to AFIP error 600: the delete is unconditional and,
+// with concurrent callers, can wipe the token another caller just renewed,
+// leaving the CUIT with coe.alreadyAuthenticated for up to 12 h. Use Renew or
+// CallWithAuthRetry, which never delete the stored token. Invalidate is meant
+// for deliberate resets (e.g. the tenant replaced its certificate).
 func (cc *CachedClient) Invalidate(ctx context.Context, cuit int64, service string, production bool) error {
 	return cc.store.Delete(ctx, cacheKey(cuit, service, production))
 }

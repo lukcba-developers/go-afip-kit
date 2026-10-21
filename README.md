@@ -655,7 +655,7 @@ conds, _ := wsfe.CondicionesIVAReceptor(ctx, token, cuit, "C") // RG 5616
 
 ## Requirements
 
-- Go 1.26.9+ (the minimum patch without known standard-library vulnerabilities)
+- Go 1.26.10+ (the minimum patch without known standard-library vulnerabilities)
 - AFIP certificate (.crt) and private key (.key) for the CUIT to operate
 - Punto de venta configured in AFIP for electronic invoicing
 

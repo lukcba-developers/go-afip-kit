@@ -31,6 +31,10 @@ especificación técnica de WSAA.
   un test que fija el formato) y que `IsIndeterminate` vale para todas las
   consultas de wsfev1.
 
+- **go.mod:** el mínimo pasa a **Go 1.26.10**. Con 1.26.9, govulncheck marca
+  GO-2026-6809 (`crypto/x509`), que la librería usa al parsear certificados. El
+  CI también prueba con 1.26.10.
+
 Sin cambios en firmas existentes.
 
 ## v0.4.0
