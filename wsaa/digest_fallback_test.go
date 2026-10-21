@@ -93,6 +93,14 @@ func (f *fakeWSAA) handler(t *testing.T) http.HandlerFunc {
 			t.Errorf("invalid CMS: %v", err)
 			return
 		}
+		// Como WSAA: el TRA tiene que validar contra loginTicketRequest.xsd.
+		if err := checkTRA(p7.Content); err != nil {
+			t.Errorf("TRA inválido: %v", err)
+			w.Header().Set("Content-Type", "text/xml")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(faultResponse(FaultXMLBad, "No se ha podido interpretar el XML contra el SCHEMA")))
+			return
+		}
 		digest := "SHA-1"
 		if p7.Signers[0].DigestAlgorithm.Algorithm.Equal(pkcs7.OIDDigestAlgorithmSHA256) {
 			digest = "SHA-256"

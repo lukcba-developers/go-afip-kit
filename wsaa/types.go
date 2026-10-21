@@ -29,7 +29,7 @@ type loginTicketRequest struct {
 }
 
 type traHeader struct {
-	UniqueID       int64  `xml:"uniqueId"`
+	UniqueID       uint32 `xml:"uniqueId"` // xs:unsignedInt
 	GenerationTime string `xml:"generationTime"`
 	ExpirationTime string `xml:"expirationTime"`
 }
@@ -50,9 +50,9 @@ type loginCmsResponse struct {
 // --- TA (Ticket de Acceso) — parsed from loginCmsReturn ---
 
 type loginTicketResponse struct {
-	XMLName     xml.Name        `xml:"loginTicketResponse"`
-	Header      taHeader        `xml:"header"`
-	Credentials taCredentials   `xml:"credentials"`
+	XMLName     xml.Name      `xml:"loginTicketResponse"`
+	Header      taHeader      `xml:"header"`
+	Credentials taCredentials `xml:"credentials"`
 }
 
 type taHeader struct {

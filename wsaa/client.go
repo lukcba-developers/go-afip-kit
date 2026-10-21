@@ -69,27 +69,53 @@ func (c *Client) SignatureDigest() string {
 	return "SHA-256"
 }
 
-// login signs a fresh TRA with the given digest and calls LoginCms.
-func (c *Client) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, service string, production bool, digest asn1.ObjectIdentifier) (*TokenAcceso, error) {
-	// 1. Generate TRA (Ticket de Requerimiento de Acceso)
-	now := time.Now()
+// lastUniqueID is the last TRA uniqueId issued by this process.
+var lastUniqueID atomic.Uint32
+
+// nextUniqueID returns a TRA uniqueId. The loginTicketRequest schema declares
+// it xs:unsignedInt (32 bits): a larger value makes WSAA answer xml.bad. It is
+// the Unix time in seconds (valid until 2106), bumped when needed so two TRAs
+// of the same process never share it (e.g. the SHA-1 retry in the same second).
+func nextUniqueID(now time.Time) uint32 {
+	for {
+		last := lastUniqueID.Load()
+		id := uint32(now.Unix())
+		if id <= last {
+			id = last + 1
+		}
+		if lastUniqueID.CompareAndSwap(last, id) {
+			return id
+		}
+	}
+}
+
+// buildTRA returns the TRA XML (with its XML declaration, which WSAA requires)
+// following loginTicketRequest.xsd: header (uniqueId, generationTime,
+// expirationTime) and service.
+func buildTRA(now time.Time, service string) ([]byte, error) {
 	tra := loginTicketRequest{
 		Version: "1.0",
 		Header: traHeader{
-			UniqueID:       now.UnixNano(),
+			UniqueID:       nextUniqueID(now),
 			GenerationTime: now.Add(-10 * time.Minute).Format(time.RFC3339),
 			ExpirationTime: now.Add(10 * time.Minute).Format(time.RFC3339),
 		},
 		Service: service,
 	}
-
 	traXML, err := xml.Marshal(tra)
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(xml.Header), traXML...), nil
+}
+
+// login signs a fresh TRA with the given digest and calls LoginCms.
+func (c *Client) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, service string, production bool, digest asn1.ObjectIdentifier) (*TokenAcceso, error) {
+	// 1. Generate TRA (Ticket de Requerimiento de Acceso)
+	traXML, err := buildTRA(time.Now(), service)
 	if err != nil {
 		return nil, &afipkit.ErrWSAAAuth{Err: fmt.Errorf("marshal TRA: %w", err)}
 	}
-
-	// Prepend XML declaration (AFIP requires it)
-	traXML = append([]byte(xml.Header), traXML...)
 
 	// 2. Sign TRA with CMS/PKCS#7
 	cms, err := signCMS(traXML, cert, key, digest)

@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.2
+
+- **wsaa (corrección crítica):** `LoginCms` respondía `xml.bad` ("No se ha
+  podido interpretar el XML contra el SCHEMA"). El `uniqueId` del TRA era
+  `time.UnixNano()` (~1,7·10¹⁸), pero `loginTicketRequest.xsd` lo declara
+  `xs:unsignedInt` (32 bits). Ahora es el Unix time en segundos (válido hasta
+  2106) y nunca se repite dentro del proceso, ni siquiera en el reintento con
+  SHA-1 del mismo segundo.
+- Tests: el WSAA falso valida el TRA como el schema (orden, `uniqueId` de 32
+  bits, fechas `xs:dateTime`) y responde `xml.bad` si no cumple.
+
 ## v0.5.1
 
 - **wsaa/soap (corrección crítica):** `LoginCms` fallaba siempre contra WSAA
