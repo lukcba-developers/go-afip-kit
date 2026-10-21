@@ -5,11 +5,13 @@ Go client library for Argentina's **AFIP (ARCA)** electronic invoicing web servi
 Covers the full invoicing lifecycle: certificate management, WSAA authentication, WSFEv1 electronic invoicing, and Argentine fiscal rules — all in a standalone library with no framework or database dependencies.
 
 ```bash
-go get github.com/lukcba-developers/go-afip-kit@v0.5.0
+go get github.com/lukcba-developers/go-afip-kit@v0.6.0
 ```
 
-> Upgrading from v0.2.x? See [CHANGELOG.md](CHANGELOG.md) — v0.3.0 has breaking changes
-> (`CachedClient.Invalidate`, token cache keys, RI→Monotributista is now Factura A).
+> Upgrading from v0.2.x or v0.4.x? See [CHANGELOG.md](CHANGELOG.md) for breaking changes and new features
+> (v0.3.0 changed `CachedClient.Invalidate`, token cache keys, and RI→Monotributista;
+> v0.5.x added SHA-1 fallback, 32-bit TRA uniqueId, and `CallWithAuthRetry`;
+> v0.6.0 added delegation support with `IsCUITNoRepresentado`).
 
 ## Features
 
@@ -26,13 +28,20 @@ go get github.com/lukcba-developers/go-afip-kit@v0.5.0
 
 | Package | Description |
 |---------|-------------|
-| `afipkit` (root) | Constants (comprobante types, IVA codes, currencies, documents) and shared error types |
-| `soap/` | Minimal SOAP 1.1 client — envelope wrapping, fault detection, opt-in retries, no WSDL |
-| `wsaa/` | WSAA authentication — `Client`, `CachedClient`, `TokenStore` interface, `IsAlreadyAuthenticated` |
+| `afipkit` (root) | Constants (comprobante types, IVA codes, currencies, documents), `NormalizarCUIT`, `ValidarCUIT`, and shared error types |
+| `soap/` | Minimal SOAP 1.1 client — envelope wrapping, fault detection, opt-in retries, no redirects, no WSDL |
+| `wsaa/` | WSAA authentication — `Client` (SHA-256 with SHA-1 fallback), `CachedClient`, `TokenStore`, distributed `Locker`, auth retry |
 | `wsfev1/` | WSFEv1 invoicing — `SolicitarCAE`, `Recuperar`, `ConsultarComprobante`, request validation, parameter queries |
-| `cert/` | Certificate parsing, validation, and `KeyVault` for encrypted private key storage |
-| `fiscal/` | Argentine fiscal rules — comprobante determination, amount validation, IVA calculation |
-| `qr/` | AFIP QR code URL builder (RG 4892) for printed/PDF comprobantes |
+| `cert/` | Certificate parsing, validation, `CUITDelCertificado`, and `KeyVault` (AES-256-GCM with AAD) |
+| `fiscal/` | Argentine fiscal rules — comprobante determination, amount validation, IVA calculation, RG 5616, RG 5003 |
+| `qr/` | AFIP QR code URL builder (RG 4892 / RG 5614) for printed/PDF comprobantes |
+
+## Documentation
+
+- **[User Guide (Guía de uso)](docs/usage.md)** — Comprehensive guide with detailed code examples: full invoicing lifecycle, QR codes, outage recovery, distributed locking with Redis, delegation, error handling, parameter queries.
+- **[Architecture (Arquitectura)](docs/architecture.md)** — Design principles, package layering, thread safety, WSAA token lifecycle, and error hierarchy.
+- **[Contributing (Guía para contribuir)](docs/contributing.md)** — How to add new AFIP web services, fiscal rules, PR checklist, and development guidelines.
+- **[Changelog](CHANGELOG.md)** — Full release history and breaking changes.
 
 ## Quick Start
 
@@ -118,7 +127,7 @@ func main() {
             FeDetReq: []wsfev1.FECAEDetRequest{{
                 Concepto:     afipkit.ConceptoServicios,
                 DocTipo:      afipkit.DocCUIT,
-                DocNro:       30123456789,
+                DocNro:       30111111118,
                 CbteDesde:    siguiente,
                 CbteHasta:    siguiente,
                 CbteFch:      fiscal.FormatFechaAFIP(time.Now()),

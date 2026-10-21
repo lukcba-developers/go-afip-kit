@@ -1,7 +1,7 @@
 // Package afipkit provides a Go client library for AFIP (ARCA) web services.
 //
 // It covers WSAA authentication (CMS/PKCS#7 signing), WSFEv1 electronic invoicing,
-// certificate management, and Argentine fiscal rules.
+// certificate management, Argentine fiscal rules, and mandatory QR codes (RG 4892).
 //
 // Designed as a standalone library — no framework or database dependencies.
 package afipkit
