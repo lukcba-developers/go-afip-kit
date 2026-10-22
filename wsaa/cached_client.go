@@ -3,7 +3,10 @@ package wsaa
 import (
 	"context"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -24,11 +27,12 @@ type authenticator interface {
 // CachedClient wraps a WSAA Client with a TokenStore for automatic caching.
 // It avoids redundant LoginCms calls by reusing valid tokens.
 //
-// Tokens are cached per (environment, cuit, service): homologacion and
-// produccion use different WSAA servers and their tokens are not
-// interchangeable, so they never share a cache entry.
+// Tokens are cached per (environment, cuit, service, certificate):
+// homologacion and produccion use different WSAA servers and their tokens are
+// not interchangeable, and a token is only reused by the certificate that
+// obtained it (the key includes the SHA-256 fingerprint of the certificate).
 //
-// Concurrent Authenticate calls for the same (environment, cuit, service) are coalesced:
+// Concurrent Authenticate calls for the same key are coalesced:
 // only one goroutine performs the LoginCms while the rest wait and reuse the
 // resulting token. This matters because WSAA rejects a new LoginCms while a
 // previous TA is still valid (fault coe.alreadyAuthenticated) — without
@@ -38,7 +42,7 @@ type authenticator interface {
 // That coalescing is per process. With several replicas sharing the
 // TokenStore, configure WithLocker so only one replica calls LoginCms.
 //
-// The cuit taken by its methods identifies the TA in the cache: it is the CUIT
+// The cuit taken by its methods is part of the cache key: it is the CUIT
 // whose certificate logs in to WSAA. It is independent of the Auth.Cuit sent
 // to WSFE. Under delegation, where a platform invoices on behalf of taxpayers
 // who authorized its CUIT, pass the platform's CUIT here and the represented
@@ -81,7 +85,7 @@ func WithCacheLogger(l *slog.Logger) CachedOption {
 }
 
 // WithLocker enables a distributed lock so that only one process at a time
-// calls LoginCms for a given (environment, cuit, service). The others wait,
+// calls LoginCms for a given (environment, cuit, service, certificate). The others wait,
 // polling the TokenStore, and reuse the token the winner stored. Use it when
 // several replicas share the TokenStore.
 func WithLocker(l Locker) CachedOption {
@@ -114,18 +118,29 @@ func NewCachedClient(client *Client, store TokenStore, opts ...CachedOption) *Ca
 	return cc
 }
 
+// ErrNilCertificate is returned when a CachedClient method gets a nil
+// certificate: the cache key depends on it.
+var ErrNilCertificate = errors.New("wsaa: certificado nil")
+
 // cacheKey builds a deterministic key for the token store:
-// "wsaa:{homo|prod}:{cuit}:{service}".
-func cacheKey(cuit int64, service string, production bool) string {
+// "wsaa:{homo|prod}:{cuit}:{service}:{fingerprint}", where fingerprint is the
+// hex SHA-256 of the certificate DER. Including the certificate means a token
+// is only returned to the certificate that obtained it.
+func cacheKey(cert *x509.Certificate, cuit int64, service string, production bool) (string, error) {
+	if cert == nil {
+		return "", ErrNilCertificate
+	}
 	env := "homo"
 	if production {
 		env = "prod"
 	}
-	return fmt.Sprintf("wsaa:%s:%d:%s", env, cuit, service)
+	fp := sha256.Sum256(cert.Raw)
+	return fmt.Sprintf("wsaa:%s:%d:%s:%s", env, cuit, service, hex.EncodeToString(fp[:])), nil
 }
 
 // keyLock returns the mutex for a cache key, creating it on first use.
-// The map only grows by one entry per (environment, cuit, service), so it stays tiny.
+// The map grows by one entry per cache key (one per certificate, service and
+// environment in use), so it stays small.
 func (cc *CachedClient) keyLock(k string) *sync.Mutex {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
@@ -138,11 +153,14 @@ func (cc *CachedClient) keyLock(k string) *sync.Mutex {
 }
 
 // Authenticate returns a cached token if still valid, otherwise obtains a new
-// one from WSAA and caches it. Concurrent calls for the same
-// (environment, cuit, service) share a single LoginCms request: within the
+// one from WSAA and caches it. Concurrent calls for the same cache key
+// (environment, cuit, service, certificate) share a single LoginCms request: within the
 // process always, and across processes when WithLocker is configured.
 func (cc *CachedClient) Authenticate(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, cuit int64, service string, production bool) (*TokenAcceso, error) {
-	k := cacheKey(cuit, service, production)
+	k, err := cacheKey(cert, cuit, service, production)
+	if err != nil {
+		return nil, err
+	}
 
 	// Fast path: valid cached token, no lock needed.
 	if token, err := cc.cached(ctx, k); err != nil || token != nil {
@@ -165,7 +183,11 @@ func (cc *CachedClient) Authenticate(ctx context.Context, cert *x509.Certificate
 // several replicas, configure WithLocker so the check and the renewal are
 // atomic across them.
 func (cc *CachedClient) Renew(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, cuit int64, service string, production bool, rejected *TokenAcceso) (*TokenAcceso, error) {
-	return cc.obtain(ctx, cert, key, cacheKey(cuit, service, production), service, production, rejected)
+	k, err := cacheKey(cert, cuit, service, production)
+	if err != nil {
+		return nil, err
+	}
+	return cc.obtain(ctx, cert, key, k, service, production, rejected)
 }
 
 // CallWithAuthRetry runs call with a valid token. If call fails with AFIP
@@ -307,15 +329,19 @@ func (cc *CachedClient) login(ctx context.Context, cert *x509.Certificate, key *
 	return token, nil
 }
 
-// Invalidate removes the cached token for the given environment, forcing
-// re-authentication on the next call. The token of the other environment is
-// left untouched.
+// Invalidate removes the cached token of that certificate for the given
+// environment, forcing re-authentication on the next call. Tokens of other
+// certificates and of the other environment are left untouched.
 //
 // Do NOT use it to react to AFIP error 600: the delete is unconditional and,
 // with concurrent callers, can wipe the token another caller just renewed,
 // leaving the CUIT with coe.alreadyAuthenticated for up to 12 h. Use Renew or
 // CallWithAuthRetry, which never delete the stored token. Invalidate is meant
-// for deliberate resets (e.g. the tenant replaced its certificate).
-func (cc *CachedClient) Invalidate(ctx context.Context, cuit int64, service string, production bool) error {
-	return cc.store.Delete(ctx, cacheKey(cuit, service, production))
+// for deliberate resets.
+func (cc *CachedClient) Invalidate(ctx context.Context, cert *x509.Certificate, cuit int64, service string, production bool) error {
+	k, err := cacheKey(cert, cuit, service, production)
+	if err != nil {
+		return err
+	}
+	return cc.store.Delete(ctx, k)
 }

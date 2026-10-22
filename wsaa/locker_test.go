@@ -39,7 +39,7 @@ func TestLocker_CoalescesAcrossReplicas(t *testing.T) {
 		wg.Add(1)
 		go func(cc *CachedClient) {
 			defer wg.Done()
-			if _, err := cc.Authenticate(context.Background(), nil, nil, 20111111112, "wsfe", true); err != nil {
+			if _, err := cc.Authenticate(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true); err != nil {
 				errs <- err
 			}
 		}(replicas[i%len(replicas)])
@@ -54,7 +54,7 @@ func TestLocker_CoalescesAcrossReplicas(t *testing.T) {
 	}
 
 	// The lock was released.
-	if ok, _ := locker.TryLock(context.Background(), "wsaa:prod:20111111112:wsfe:lock", "someone", time.Second); !ok {
+	if ok, _ := locker.TryLock(context.Background(), testKey(t, 20111111112, true)+":lock", "someone", time.Second); !ok {
 		t.Error("lock should be released after login")
 	}
 }
@@ -64,13 +64,13 @@ func TestLocker_CoalescesAcrossReplicas(t *testing.T) {
 func TestLocker_WaitsUntilContextDone(t *testing.T) {
 	fake := &fakeAuthenticator{}
 	store, locker := NewMemoryStore(), NewMemoryLocker()
-	_, _ = locker.TryLock(context.Background(), "wsaa:homo:20111111112:wsfe:lock", "other-pod", time.Minute)
+	_, _ = locker.TryLock(context.Background(), testKey(t, 20111111112, false)+":lock", "other-pod", time.Minute)
 
 	cc := newReplica(fake, store, locker)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := cc.Authenticate(ctx, nil, nil, 20111111112, "wsfe", false)
+	_, err := cc.Authenticate(ctx, fixtureCert, nil, 20111111112, "wsfe", false)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline exceeded, got %v", err)
 	}
@@ -84,17 +84,17 @@ func TestLocker_WaitsUntilContextDone(t *testing.T) {
 func TestLocker_ReusesTokenStoredByLockHolder(t *testing.T) {
 	fake := &fakeAuthenticator{}
 	store, locker := NewMemoryStore(), NewMemoryLocker()
-	const lockKey = "wsaa:homo:20111111112:wsfe:lock"
+	lockKey := testKey(t, 20111111112, false) + ":lock"
 	_, _ = locker.TryLock(context.Background(), lockKey, "other-pod", time.Minute)
 
 	go func() {
 		time.Sleep(30 * time.Millisecond)
-		_ = store.Set(context.Background(), "wsaa:homo:20111111112:wsfe",
+		_ = store.Set(context.Background(), testKey(t, 20111111112, false),
 			&TokenAcceso{Token: "from-other-pod", Sign: "s", Expiration: time.Now().Add(12 * time.Hour)})
 	}()
 
 	cc := newReplica(fake, store, locker)
-	tok, err := cc.Authenticate(context.Background(), nil, nil, 20111111112, "wsfe", false)
+	tok, err := cc.Authenticate(context.Background(), fixtureCert, nil, 20111111112, "wsfe", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +111,12 @@ func TestLocker_ReusesTokenStoredByLockHolder(t *testing.T) {
 func TestLocker_TakesOverExpiredLock(t *testing.T) {
 	fake := &fakeAuthenticator{}
 	store, locker := NewMemoryStore(), NewMemoryLocker()
-	_, _ = locker.TryLock(context.Background(), "wsaa:homo:20111111112:wsfe:lock", "dead-pod", 30*time.Millisecond)
+	_, _ = locker.TryLock(context.Background(), testKey(t, 20111111112, false)+":lock", "dead-pod", 30*time.Millisecond)
 
 	cc := newReplica(fake, store, locker)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if _, err := cc.Authenticate(ctx, nil, nil, 20111111112, "wsfe", false); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, 20111111112, "wsfe", false); err != nil {
 		t.Fatal(err)
 	}
 	if n := atomic.LoadInt32(&fake.calls); n != 1 {
@@ -134,7 +134,7 @@ func (failingLocker) Unlock(context.Context, string, string) error { return nil 
 func TestLocker_ErrorIsReturned(t *testing.T) {
 	fake := &fakeAuthenticator{}
 	cc := newReplica(fake, NewMemoryStore(), failingLocker{})
-	if _, err := cc.Authenticate(context.Background(), nil, nil, 20111111112, "wsfe", false); err == nil {
+	if _, err := cc.Authenticate(context.Background(), fixtureCert, nil, 20111111112, "wsfe", false); err == nil {
 		t.Fatal("expected lock error")
 	}
 	if n := atomic.LoadInt32(&fake.calls); n != 0 {
@@ -158,9 +158,9 @@ func (f *alreadyAuthFake) Authenticate(ctx context.Context, _ *x509.Certificate,
 func TestCachedClient_AlreadyAuthenticatedReusesStoredToken(t *testing.T) {
 	store := NewMemoryStore()
 	cc := NewCachedClient(nil, store)
-	cc.client = &alreadyAuthFake{store: store, key: "wsaa:prod:20111111112:wsfe"}
+	cc.client = &alreadyAuthFake{store: store, key: testKey(t, 20111111112, true)}
 
-	tok, err := cc.Authenticate(context.Background(), nil, nil, 20111111112, "wsfe", true)
+	tok, err := cc.Authenticate(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true)
 	if err != nil {
 		t.Fatalf("expected the stored token, got error %v", err)
 	}

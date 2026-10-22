@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.7.0
+
+- **wsaa (seguridad):** la caché de tokens WSAA distingue el certificado. La
+  clave pasa a ser `wsaa:{homo|prod}:{cuit}:{service}:{cert-sha256}`, con la
+  huella SHA-256 del DER del certificado. Un token solo se devuelve al
+  certificado que lo obtuvo, aunque varios certificados compartan el
+  `TokenStore`. El lock distribuido (clave del token + `:lock`) también pasa a
+  ser por certificado.
+- **Cambio incompatible:** `CachedClient.Invalidate(ctx, cert, cuit, service,
+  production)` ahora recibe el certificado.
+- `Authenticate`, `Renew`, `CallWithAuthRetry` e `Invalidate` devuelven
+  `wsaa.ErrNilCertificate` si el certificado es nil.
+- **Migración:** las claves anteriores quedan huérfanas y vencen solas (como
+  máximo 12 h). Al actualizar, el primer login de cada certificado que todavía
+  tenga un TA vigente puede recibir `coe.alreadyAuthenticated` hasta que ese TA
+  venza. Conviene actualizar cuando no haya emisión en curso o fuera de
+  horario. Si un `TokenStore` filtra por el formato de la clave, hay que
+  revisarlo.
+
 ## v0.6.0
 
 - **afipkit:** `IsCUITNoRepresentado` (error 601): el `Auth.Cuit` enviado no

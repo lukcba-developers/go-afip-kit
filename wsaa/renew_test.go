@@ -42,7 +42,7 @@ func TestCallWithAuthRetry_RenewsOnceOn600(t *testing.T) {
 	cc.client = fake
 
 	var used []string
-	err := cc.CallWithAuthRetry(context.Background(), nil, nil, 20111111112, "wsfe", true, func(tok *TokenAcceso) error {
+	err := cc.CallWithAuthRetry(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true, func(tok *TokenAcceso) error {
 		used = append(used, tok.Token)
 		if tok.Token == "tok-1" {
 			return err600
@@ -66,7 +66,7 @@ func TestCallWithAuthRetry_RetriesOnlyOnce(t *testing.T) {
 	cc.client = fake
 
 	calls := 0
-	err := cc.CallWithAuthRetry(context.Background(), nil, nil, 20111111112, "wsfe", true, func(*TokenAcceso) error {
+	err := cc.CallWithAuthRetry(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true, func(*TokenAcceso) error {
 		calls++
 		return err600
 	})
@@ -85,7 +85,7 @@ func TestCallWithAuthRetry_OtherErrorsPassThrough(t *testing.T) {
 
 	business := afipkit.NewAFIPError([]afipkit.AFIPErrorDetail{{Code: 10048}})
 	calls := 0
-	err := cc.CallWithAuthRetry(context.Background(), nil, nil, 20111111112, "wsfe", true, func(*TokenAcceso) error {
+	err := cc.CallWithAuthRetry(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true, func(*TokenAcceso) error {
 		calls++
 		return business
 	})
@@ -104,10 +104,10 @@ func TestRenew_UsesTokenRenewedByOthers(t *testing.T) {
 	cc.client = fake
 
 	stale := &TokenAcceso{Token: "stale", Sign: "s", Expiration: time.Now().Add(time.Hour * 12)}
-	_ = store.Set(context.Background(), "wsaa:prod:20111111112:wsfe",
+	_ = store.Set(context.Background(), testKey(t, 20111111112, true),
 		&TokenAcceso{Token: "renewed-by-other", Sign: "s", Expiration: time.Now().Add(12 * time.Hour)})
 
-	tok, err := cc.Renew(context.Background(), nil, nil, 20111111112, "wsfe", true, stale)
+	tok, err := cc.Renew(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true, stale)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,11 +125,11 @@ func TestRenew_AlreadyAuthenticatedKeepsStoredToken(t *testing.T) {
 	cc := NewCachedClient(nil, store)
 	cc.client = fake
 
-	const k = "wsaa:prod:20111111112:wsfe"
+	k := testKey(t, 20111111112, true)
 	stale := &TokenAcceso{Token: "stale", Sign: "s", Expiration: time.Now().Add(12 * time.Hour)}
 	_ = store.Set(context.Background(), k, stale)
 
-	_, err := cc.Renew(context.Background(), nil, nil, 20111111112, "wsfe", true, stale)
+	_, err := cc.Renew(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true, stale)
 	if !IsAlreadyAuthenticated(err) {
 		t.Fatalf("expected alreadyAuthenticated, got %v", err)
 	}
@@ -142,7 +142,7 @@ func TestRenew_AlreadyAuthenticatedKeepsStoredToken(t *testing.T) {
 func TestRenew_ConcurrentReplicasLoginOnce(t *testing.T) {
 	fake := &seqAuthenticator{delay: 30 * time.Millisecond}
 	store, locker := NewMemoryStore(), NewMemoryLocker()
-	const k = "wsaa:prod:20111111112:wsfe"
+	k := testKey(t, 20111111112, true)
 	stale := &TokenAcceso{Token: "stale", Sign: "s", Expiration: time.Now().Add(12 * time.Hour)}
 	_ = store.Set(context.Background(), k, stale)
 
@@ -153,7 +153,7 @@ func TestRenew_ConcurrentReplicasLoginOnce(t *testing.T) {
 		wg.Add(1)
 		go func(cc *CachedClient) {
 			defer wg.Done()
-			tok, err := cc.Renew(context.Background(), nil, nil, 20111111112, "wsfe", true, stale)
+			tok, err := cc.Renew(context.Background(), fixtureCert, nil, 20111111112, "wsfe", true, stale)
 			if err != nil {
 				t.Errorf("renew: %v", err)
 				return

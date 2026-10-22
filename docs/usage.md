@@ -303,7 +303,7 @@ cached := wsaa.NewCachedClient(wsaaClient, store,
 )
 ```
 
-Las claves se almacenan bajo el formato `wsaa:{homo|prod}:{cuit}:{service}`, garantizando el aislamiento total entre entornos.
+Las claves se almacenan bajo el formato `wsaa:{homo|prod}:{cuit}:{service}:{sha256-del-certificado}`: cada entorno y cada certificado tienen su propia entrada, y un token solo se devuelve al certificado que lo obtuvo, aunque varios certificados (por ejemplo, uno por tenant) compartan el store.
 
 ### Implementación distribuida con Redis (`TokenStore`)
 
@@ -374,7 +374,7 @@ cached := wsaa.NewCachedClient(wsaaClient, store,
 )
 ```
 
-La clave del lock es la clave del token más `:lock` (ej. `wsaa:prod:20123456786:wsfe:lock`). Si no se usa un lock distribuido, `wsaa.NewMemoryLocker()` permite coordinar goroutines dentro del mismo proceso.
+La clave del lock es la clave del token más `:lock` (ej. `wsaa:prod:20123456786:wsfe:<sha256-del-certificado>:lock`). Si no se usa un lock distribuido, `wsaa.NewMemoryLocker()` permite coordinar goroutines dentro del mismo proceso.
 
 ### Renovación ante Token Rechazado (Error 600)
 

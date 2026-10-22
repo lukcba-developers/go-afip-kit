@@ -15,7 +15,7 @@ go get github.com/lukcba-developers/go-afip-kit@v0.6.0
 
 ## Features
 
-- **WSAA Authentication** — CMS/PKCS#7 signed login with automatic token caching and renewal, cached separately per environment (homologacion/produccion). Concurrent logins for the same CUIT+service are coalesced into a single LoginCms (WSAA rejects duplicates with `coe.alreadyAuthenticated`)
+- **WSAA Authentication** — CMS/PKCS#7 signed login with automatic token caching and renewal, cached separately per environment (homologacion/produccion) and per certificate. Concurrent logins for the same certificate+service are coalesced into a single LoginCms (WSAA rejects duplicates with `coe.alreadyAuthenticated`)
 - **WSFEv1 Electronic Invoicing** — Emit invoices (Facturas A/B/C), credit notes, debit notes, and obtain CAE codes
 - **Idempotent Retries** — `afipkit.IsIndeterminate` tells "AFIP may have authorized it" apart from a rejection; `wsfev1.Recuperar` confirms a comprobante after an outage (verifying it matches what was sent); `SolicitarCAEConReproceso` recovers the CAE on error 10016 only when the registered comprobante matches. Plus opt-in transport retries with exponential backoff (`soap.WithRetry`)
 - **Local Request Validation** — `FECAESolicitarRequest.Validate()` catches cuadratura mismatches (error 10048), missing service dates, and malformed amounts before spending an AFIP round-trip
@@ -412,9 +412,12 @@ decrypted, _ := vault.DecryptFromBase64WithAAD(encrypted, []byte(cuit))
 
 ## Token Caching
 
-Tokens are cached under `wsaa:{homo|prod}:{cuit}:{service}`, so homologacion
-and produccion never share a token. `Invalidate(ctx, cuit, service, production)`
-drops the token of one environment only.
+Tokens are cached under `wsaa:{homo|prod}:{cuit}:{service}:{cert-sha256}`, where
+the last part is the SHA-256 fingerprint of the certificate DER. Homologacion
+and produccion never share a token, and a token is only returned to the
+certificate that obtained it, even when several certificates (e.g. one per
+tenant) share the `TokenStore`. `Invalidate(ctx, cert, cuit, service, production)`
+drops the token of that certificate in one environment only.
 
 The library includes `MemoryStore` for single-instance deployments. For multi-instance services, implement the `TokenStore` interface:
 
@@ -489,7 +492,7 @@ cached := wsaa.NewCachedClient(wsaaClient, store,
 )
 ```
 
-Lock keys are the token key plus `:lock` (e.g. `wsaa:prod:20123456786:wsfe:lock`).
+Lock keys are the token key plus `:lock` (e.g. `wsaa:prod:20123456786:wsfe:<cert-sha256>:lock`).
 Waiting replicas poll the store until the token appears, the lock expires (the
 holder died), or their context ends. `wsaa.NewMemoryLocker()` is an in-process
 implementation for tests. Independently of the lock, if LoginCms answers

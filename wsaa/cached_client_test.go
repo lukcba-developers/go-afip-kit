@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+// fixtureCert is the certificate used by the cache tests. They use a fake
+// authenticator, so only its DER (the fingerprint in the cache key) matters.
+var fixtureCert = &x509.Certificate{Raw: []byte("certificado de prueba")}
+
+// testKey returns the "wsfe" cache key of fixtureCert.
+func testKey(t *testing.T, cuit int64, production bool) string {
+	t.Helper()
+	k, err := cacheKey(fixtureCert, cuit, "wsfe", production)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
 // fakeAuthenticator counts Authenticate calls and returns a fixed token.
 type fakeAuthenticator struct {
 	calls int32
@@ -44,7 +58,7 @@ func TestCachedClient_CoalescesConcurrentAuth(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := cc.Authenticate(context.Background(), nil, nil, 20111111112, "wsfe", false)
+			_, err := cc.Authenticate(context.Background(), fixtureCert, nil, 20111111112, "wsfe", false)
 			if err != nil {
 				errs <- err
 			}
@@ -69,10 +83,10 @@ func TestCachedClient_DifferentKeysDontBlock(t *testing.T) {
 	cc.client = fake
 
 	ctx := context.Background()
-	if _, err := cc.Authenticate(ctx, nil, nil, 20111111112, "wsfe", false); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, 20111111112, "wsfe", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cc.Authenticate(ctx, nil, nil, 20222222223, "wsfe", false); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, 20222222223, "wsfe", false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,7 +95,7 @@ func TestCachedClient_DifferentKeysDontBlock(t *testing.T) {
 	}
 
 	// Second round hits the cache — no new calls.
-	if _, err := cc.Authenticate(ctx, nil, nil, 20111111112, "wsfe", false); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, 20111111112, "wsfe", false); err != nil {
 		t.Fatal(err)
 	}
 	if n := atomic.LoadInt32(&fake.calls); n != 2 {
@@ -99,38 +113,38 @@ func TestCachedClient_SeparatesEnvironments(t *testing.T) {
 
 	ctx := context.Background()
 	const cuit = 20111111112
-	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", false); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, cuit, "wsfe", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", true); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, cuit, "wsfe", true); err != nil {
 		t.Fatal(err)
 	}
 	if n := atomic.LoadInt32(&fake.calls); n != 2 {
 		t.Fatalf("expected 2 LoginCms calls (one per environment), got %d", n)
 	}
 
-	for _, k := range []string{"wsaa:homo:20111111112:wsfe", "wsaa:prod:20111111112:wsfe"} {
+	for _, k := range []string{testKey(t, 20111111112, false), testKey(t, 20111111112, true)} {
 		if tok, _ := store.Get(ctx, k); tok == nil {
 			t.Errorf("expected token cached under %q", k)
 		}
 	}
 
 	// Invalidating homologacion must not touch produccion.
-	if err := cc.Invalidate(ctx, cuit, "wsfe", false); err != nil {
+	if err := cc.Invalidate(ctx, fixtureCert, cuit, "wsfe", false); err != nil {
 		t.Fatal(err)
 	}
-	if tok, _ := store.Get(ctx, "wsaa:homo:20111111112:wsfe"); tok != nil {
+	if tok, _ := store.Get(ctx, testKey(t, 20111111112, false)); tok != nil {
 		t.Error("homo token should have been invalidated")
 	}
-	if tok, _ := store.Get(ctx, "wsaa:prod:20111111112:wsfe"); tok == nil {
+	if tok, _ := store.Get(ctx, testKey(t, 20111111112, true)); tok == nil {
 		t.Error("prod token should survive invalidating homo")
 	}
 
 	// Next homo call re-authenticates; prod still hits the cache.
-	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", false); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, cuit, "wsfe", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cc.Authenticate(ctx, nil, nil, cuit, "wsfe", true); err != nil {
+	if _, err := cc.Authenticate(ctx, fixtureCert, nil, cuit, "wsfe", true); err != nil {
 		t.Fatal(err)
 	}
 	if n := atomic.LoadInt32(&fake.calls); n != 3 {
