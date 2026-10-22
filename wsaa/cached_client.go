@@ -166,7 +166,7 @@ func (cc *CachedClient) Authenticate(ctx context.Context, cert *x509.Certificate
 	if token, err := cc.cached(ctx, k); err != nil || token != nil {
 		return token, err
 	}
-	return cc.obtain(ctx, cert, key, k, service, production, nil)
+	return cc.obtain(ctx, cert, key, k, legacyCacheKey(cuit, service, production), service, production, nil)
 }
 
 // Renew obtains a new token after a business service rejected `rejected`
@@ -187,7 +187,7 @@ func (cc *CachedClient) Renew(ctx context.Context, cert *x509.Certificate, key *
 	if err != nil {
 		return nil, err
 	}
-	return cc.obtain(ctx, cert, key, k, service, production, rejected)
+	return cc.obtain(ctx, cert, key, k, legacyCacheKey(cuit, service, production), service, production, rejected)
 }
 
 // CallWithAuthRetry runs call with a valid token. If call fails with AFIP
@@ -219,10 +219,11 @@ func (cc *CachedClient) CallWithAuthRetry(ctx context.Context, cert *x509.Certif
 }
 
 // obtain returns a usable token for key k, calling LoginCms only when needed.
-// A stored token is usable when it is valid and is not `rejected`.
-func (cc *CachedClient) obtain(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool, rejected *TokenAcceso) (*TokenAcceso, error) {
-	usable := func() (*TokenAcceso, error) {
-		token, err := cc.cached(ctx, k)
+// A stored token is usable when it is valid and is not `rejected`. legacyK is
+// the key used up to v0.6.x (see legacyToken).
+func (cc *CachedClient) obtain(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, legacyK, service string, production bool, rejected *TokenAcceso) (*TokenAcceso, error) {
+	usableAt := func(key string) (*TokenAcceso, error) {
+		token, err := cc.cached(ctx, key)
 		if err != nil || token == nil {
 			return nil, err
 		}
@@ -230,6 +231,14 @@ func (cc *CachedClient) obtain(ctx context.Context, cert *x509.Certificate, key 
 			return nil, nil
 		}
 		return token, nil
+	}
+	usable := func() (*TokenAcceso, error) { return usableAt(k) }
+	legacy := func() *TokenAcceso {
+		token, err := usableAt(legacyK)
+		if err != nil || token == nil || !tokenIssuedTo(token.Token, cert) {
+			return nil
+		}
+		return token
 	}
 
 	// Serialize per key so only one goroutine hits WSAA.
@@ -254,7 +263,7 @@ func (cc *CachedClient) obtain(ctx context.Context, cert *x509.Certificate, key 
 			return token, err
 		}
 	}
-	return cc.login(ctx, cert, key, k, service, production, usable)
+	return cc.login(ctx, cert, key, k, service, production, usable, legacy)
 }
 
 // cached returns the stored token if it is still valid, or nil.
@@ -308,14 +317,24 @@ func (cc *CachedClient) lockDistributed(ctx context.Context, k string, usable fu
 }
 
 // login calls LoginCms and stores the token.
-func (cc *CachedClient) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool, usable func() (*TokenAcceso, error)) (*TokenAcceso, error) {
+func (cc *CachedClient) login(ctx context.Context, cert *x509.Certificate, key *rsa.PrivateKey, k, service string, production bool, usable func() (*TokenAcceso, error), legacy func() *TokenAcceso) (*TokenAcceso, error) {
 	token, err := cc.client.Authenticate(ctx, cert, key, service, production)
 	if err != nil {
-		// Another process (without the lock, e.g. an older deploy) may have
-		// just logged in and stored its token: reuse it if so.
 		if IsAlreadyAuthenticated(err) {
+			// Another process (without the lock, e.g. an older deploy) may
+			// have just logged in and stored its token: reuse it if so.
 			if stored, sErr := usable(); sErr == nil && stored != nil {
 				return stored, nil
+			}
+			// The valid TA may be stored under the pre-v0.7.0 key.
+			if old := legacy(); old != nil {
+				if storeErr := cc.store.Set(ctx, k, old); storeErr != nil && cc.logger != nil {
+					cc.logger.Warn("wsaa: token store set failed", "key", k, "error", storeErr)
+				}
+				if cc.logger != nil {
+					cc.logger.Info("wsaa: TA migrado desde la clave anterior a v0.7.0", "key", k)
+				}
+				return old, nil
 			}
 		}
 		return nil, err

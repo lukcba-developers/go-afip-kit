@@ -419,6 +419,11 @@ certificate that obtained it, even when several certificates (e.g. one per
 tenant) share the `TokenStore`. `Invalidate(ctx, cert, cuit, service, production)`
 drops the token of that certificate in one environment only.
 
+Upgrading from v0.6.x: a valid TA stored under the old key
+(`wsaa:{homo|prod}:{cuit}:{service}`) is migrated on the first login that gets
+`coe.alreadyAuthenticated`, only if the token was issued to the same
+certificate (same CUIT and alias).
+
 The library includes `MemoryStore` for single-instance deployments. For multi-instance services, implement the `TokenStore` interface:
 
 ```go

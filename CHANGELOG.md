@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.7.1
+
+- **wsaa (migración desde v0.6.x):** al actualizar, si WSAA responde
+  `coe.alreadyAuthenticated` a un certificado y bajo la clave anterior
+  (`wsaa:{homo|prod}:{cuit}:{service}`) hay un TA vigente emitido a ese mismo
+  certificado, se reutiliza y se guarda bajo la clave nueva. "Ese mismo" quiere
+  decir que el `uid` del token, el DN del certificado que lo obtuvo según el
+  Manual del Desarrollador de WSAA, tiene el mismo CUIT y el mismo alias. Así
+  la actualización no deja a los certificados sin token hasta que vence su TA.
+  Ante cualquier duda (token ilegible, otro CUIT u otro alias, certificado que
+  WSAA no acepta) no hay fallback y se devuelve el error de WSAA. Este camino
+  de migración se va a quitar en una versión futura.
+
 ## v0.7.0
 
 - **wsaa (seguridad):** la caché de tokens WSAA distingue el certificado. La
